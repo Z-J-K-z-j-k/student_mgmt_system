@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE configs
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# SQLite DB (optional)
+*.db
+
+# OS junk files
+Thumbs.db
+.DS_Store
+
+# Student mgmt project specific
+student_mgmt/server/__pycache__/
+student_mgmt/client/__pycache__/
+

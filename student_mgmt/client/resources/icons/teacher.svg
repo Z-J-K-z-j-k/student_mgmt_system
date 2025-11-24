@@ -1,0 +1,9 @@
+<!--?xml version="1.0" encoding="UTF-8"?-->
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#4A90E2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+
+  <!-- 学位帽（教师象征） -->
+  <path d="M2 9l10-5 10 5-10 5-10-5z"></path>
+  <path d="M12 14v7"></path>
+  <path d="M6 10v3c0 1.7 2.7 3 6 3s6-1.3 6-3v-3"></path>
+
+</svg>

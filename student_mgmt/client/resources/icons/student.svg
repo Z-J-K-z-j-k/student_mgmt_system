@@ -1,0 +1,10 @@
+<!--?xml version="1.0" encoding="UTF-8"?-->
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#4A90E2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+
+  <!-- 头部 -->
+  <circle cx="12" cy="7" r="4"></circle>
+
+  <!-- 身体（肩膀 + 上半身） -->
+  <path d="M5 21c0-4 3-6 7-6s7 2 7 6"></path>
+
+</svg>

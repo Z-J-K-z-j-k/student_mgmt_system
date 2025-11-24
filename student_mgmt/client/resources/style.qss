@@ -1,0 +1,159 @@
+/* =========================
+   全局设置
+   ========================= */
+* {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 14px;
+}
+
+/* =========================
+   主窗口背景
+   ========================= */
+QMainWindow {
+    background-color: #f5f6fa;
+}
+
+/* =========================
+   左侧侧边栏
+   ========================= */
+#SideBar {
+    background-color: #2b2f38;
+    border-right: 1px solid #3d4250;
+}
+
+#MenuList {
+    background-color: transparent;
+    border: none;
+}
+
+QListWidget::item {
+    color: #cfd3dc;
+    padding: 8px 15px;
+    border-radius: 6px;
+}
+
+QListWidget::item:selected {
+    background-color: #3a8dd0;
+    color: white;
+}
+
+QListWidget::item:hover {
+    background-color: #3a3f4a;
+}
+
+/* 用户标签 */
+#SideBar QLabel {
+    color: #f0f0f0;
+    font-weight: bold;
+}
+
+/* =========================
+   退出按钮
+   ========================= */
+QPushButton {
+    background-color: #39404d;
+    color: #e6e6e6;
+    border-radius: 6px;
+    height: 32px;
+}
+
+QPushButton:hover {
+    background-color: #4a5363;
+}
+
+QPushButton:pressed {
+    background-color: #3a4352;
+}
+
+/* =========================
+   输入框
+   ========================= */
+QLineEdit {
+    background: white;
+    padding: 6px;
+    border-radius: 6px;
+    border: 1px solid #d0d0d0;
+}
+
+QLineEdit:focus {
+    border: 1px solid #3a8dd0;
+}
+
+/* =========================
+   下拉框
+   ========================= */
+QComboBox {
+    background: white;
+    padding: 6px;
+    border-radius: 6px;
+    border: 1px solid #d0d0d0;
+}
+
+QComboBox:focus {
+    border: 1px solid #3a8dd0;
+}
+
+/* =========================
+   表格 TableWidget
+   ========================= */
+QTableWidget {
+    background: white;
+    alternate-background-color: #f2f4f7;
+    gridline-color: #d0d0d0;
+    border: none;
+}
+
+QHeaderView::section {
+    background-color: #3a3f4a;
+    color: #ffffff;
+    padding: 6px;
+    border: none;
+    font-weight: bold;
+}
+
+/* 鼠标悬停行 */
+QTableWidget::item:hover {
+    background-color: #e6f2ff;
+}
+
+/* 选中行 */
+QTableWidget::item:selected {
+    background-color: #cce4ff;
+    color: black;
+}
+
+/* =========================
+   滚动条美化
+   ========================= */
+QScrollBar:vertical {
+    background: #e0e0e0;
+    width: 10px;
+    margin: 0px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background: #a5a5a5;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #7f7f7f;
+}
+
+/* 横向滚动条（如表格） */
+QScrollBar:horizontal {
+    background: #e0e0e0;
+    height: 10px;
+    margin: 0px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #a5a5a5;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #7f7f7f;
+}

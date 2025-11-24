@@ -1,0 +1,45 @@
+<!--?xml version="1.0" encoding="UTF-8"?-->
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#4A90E2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+
+  <!-- 对称齿轮（标准八齿） -->
+  <path d="
+    M12 3
+    L13.5 3.3
+    L14.6 4.7
+    L16.2 5.2
+    L17.7 4.2
+    L19 5.5
+    L18 7
+    L18.5 8.6
+    L20 10
+    L20 12
+    L18.5 13.4
+    L18 15
+    L19 16.5
+    L17.7 17.8
+    L16.2 16.8
+    L14.6 17.3
+    L13.5 18.7
+    L12 19
+    L10.5 18.7
+    L9.4 17.3
+    L7.8 16.8
+    L6.3 17.8
+    L5 16.5
+    L6 15
+    L5.5 13.4
+    L4 12
+    L4 10
+    L5.5 8.6
+    L6 7
+    L5 5.5
+    L6.3 4.2
+    L7.8 5.2
+    L9.4 4.7
+    L10.5 3.3
+    Z
+  "></path>
+
+  <!-- 圆心（光学上提 0.6px） -->
+  <circle cx="12" cy="11.4" r="3"></circle>
+</svg>

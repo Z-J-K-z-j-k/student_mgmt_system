@@ -1,0 +1,12 @@
+<!--?xml version="1.0" encoding="UTF-8"?-->
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#4A90E2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+
+  <!-- X 轴 -->
+  <path d="M3 20h18"></path>
+
+  <!-- 三根柱状图 -->
+  <rect x="6" y="12" width="3" height="8" rx="1"></rect>
+  <rect x="11" y="8" width="3" height="12" rx="1"></rect>
+  <rect x="16" y="5" width="3" height="15" rx="1"></rect>
+
+</svg>
