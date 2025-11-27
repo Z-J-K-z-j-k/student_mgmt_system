@@ -86,7 +86,7 @@ class MainWindow(QMainWindow):
 
         self.add_page("大模型助手",
                       r"student_mgmt\client\resources\icons\ai.svg",
-                      LLMPage(self.api))
+                      LLMPage(self.api, self.api.role or "student"))
 
         # 让菜单切换页面
         self.menu.currentRowChanged.connect(self.stack.setCurrentIndex)

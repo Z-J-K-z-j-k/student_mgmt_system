@@ -1,7 +1,12 @@
 # client/utils/api_client.py
 import requests
 
-SERVER_URL = "http://127.0.0.1:5000"   # 另一台机器时改成服务器 IP
+# 从配置文件导入服务器地址
+try:
+    from ..config import SERVER_URL
+except ImportError:
+    # 如果配置文件不存在，使用默认值
+    SERVER_URL = "http://127.0.0.1:5000"
 
 class APIClient:
     def __init__(self):
@@ -16,17 +21,42 @@ class APIClient:
         # 这里简单一点，没做真正 token 校验
         return {"X-Token": self.token} if self.token else {}
 
+    def _timeout(self, kwargs):
+        return kwargs.pop("timeout", 20)
+
     def get(self, path, **kwargs):
-        return requests.get(SERVER_URL + path, headers=self._headers(), timeout=5, **kwargs)
+        return requests.get(
+            SERVER_URL + path,
+            headers=self._headers(),
+            timeout=self._timeout(kwargs),
+            **kwargs,
+        )
 
     def post(self, path, json=None, **kwargs):
-        return requests.post(SERVER_URL + path, json=json, headers=self._headers(), timeout=5, **kwargs)
+        return requests.post(
+            SERVER_URL + path,
+            json=json,
+            headers=self._headers(),
+            timeout=self._timeout(kwargs),
+            **kwargs,
+        )
 
     def put(self, path, json=None, **kwargs):
-        return requests.put(SERVER_URL + path, json=json, headers=self._headers(), timeout=5, **kwargs)
+        return requests.put(
+            SERVER_URL + path,
+            json=json,
+            headers=self._headers(),
+            timeout=self._timeout(kwargs),
+            **kwargs,
+        )
 
     def delete(self, path, **kwargs):
-        return requests.delete(SERVER_URL + path, headers=self._headers(), timeout=5, **kwargs)
+        return requests.delete(
+            SERVER_URL + path,
+            headers=self._headers(),
+            timeout=self._timeout(kwargs),
+            **kwargs,
+        )
 
     # ---------- 业务 ----------
 

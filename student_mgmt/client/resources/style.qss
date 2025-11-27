@@ -7,14 +7,14 @@
 }
 
 /* =========================
-   主窗口背景
+   主窗口背景 - 白色
    ========================= */
 QMainWindow {
     background-color: #f5f6fa;
 }
 
 /* =========================
-   左侧侧边栏
+   左侧侧边栏 - 深色主题（保持不变）
    ========================= */
 #SideBar {
     background-color: #2b2f38;
@@ -41,20 +41,39 @@ QListWidget::item:hover {
     background-color: #3a3f4a;
 }
 
-/* 用户标签 */
+/* 侧边栏内的标签保持白色 */
 #SideBar QLabel {
     color: #f0f0f0;
     font-weight: bold;
 }
 
 /* =========================
-   退出按钮
+   右侧内容区域 - 白底黑字
+   ========================= */
+QStackedWidget {
+    background-color: #ffffff;
+}
+
+/* 右侧内容区域的标签 - 黑色文本 */
+QStackedWidget QLabel {
+    color: #1f1f1f;
+    background-color: transparent;
+}
+
+/* 表单标签 - 黑色文本 */
+QStackedWidget QFormLayout QLabel {
+    color: #1f1f1f;
+}
+
+/* =========================
+   按钮
    ========================= */
 QPushButton {
     background-color: #39404d;
     color: #e6e6e6;
     border-radius: 6px;
     height: 32px;
+    border: none;
 }
 
 QPushButton:hover {
@@ -65,11 +84,29 @@ QPushButton:pressed {
     background-color: #3a4352;
 }
 
+/* 右侧内容区域的按钮 - 浅色风格 */
+QStackedWidget QPushButton {
+    background-color: #3a8dd0;
+    color: #ffffff;
+    border-radius: 6px;
+    padding: 8px 16px;
+    height: auto;
+}
+
+QStackedWidget QPushButton:hover {
+    background-color: #5BA0FF;
+}
+
+QStackedWidget QPushButton:pressed {
+    background-color: #2F74D0;
+}
+
 /* =========================
-   输入框
+   输入框 - 白底黑字
    ========================= */
 QLineEdit {
-    background: white;
+    background-color: #ffffff;
+    color: #1f1f1f;
     padding: 6px;
     border-radius: 6px;
     border: 1px solid #d0d0d0;
@@ -77,13 +114,15 @@ QLineEdit {
 
 QLineEdit:focus {
     border: 1px solid #3a8dd0;
+    background-color: #ffffff;
 }
 
 /* =========================
-   下拉框
+   下拉框 - 白底黑字
    ========================= */
 QComboBox {
-    background: white;
+    background-color: #ffffff;
+    color: #1f1f1f;
     padding: 6px;
     border-radius: 6px;
     border: 1px solid #d0d0d0;
@@ -93,14 +132,38 @@ QComboBox:focus {
     border: 1px solid #3a8dd0;
 }
 
+QComboBox::drop-down {
+    border: none;
+    background-color: #ffffff;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #1f1f1f;
+    border: 1px solid #d0d0d0;
+    selection-background-color: #3a8dd0;
+    selection-color: #ffffff;
+}
+
 /* =========================
-   表格 TableWidget
+   表格 TableWidget - 白底黑字
    ========================= */
 QTableWidget {
-    background: white;
+    background-color: #ffffff;
     alternate-background-color: #f2f4f7;
     gridline-color: #d0d0d0;
     border: none;
+    color: #1f1f1f;
+}
+
+QTableWidget::item {
+    color: #1f1f1f;
+    padding: 4px;
+    background-color: #ffffff;
+}
+
+QTableWidget::item:alternate {
+    background-color: #f2f4f7;
 }
 
 QHeaderView::section {
@@ -111,49 +174,87 @@ QHeaderView::section {
     font-weight: bold;
 }
 
-/* 鼠标悬停行 */
 QTableWidget::item:hover {
     background-color: #e6f2ff;
+    color: #1f1f1f;
 }
 
-/* 选中行 */
 QTableWidget::item:selected {
     background-color: #cce4ff;
-    color: black;
+    color: #1f1f1f;
 }
 
 /* =========================
-   滚动条美化
+   滚动条
    ========================= */
 QScrollBar:vertical {
-    background: #e0e0e0;
+    background-color: #e0e0e0;
     width: 10px;
     margin: 0px;
     border-radius: 5px;
 }
 
 QScrollBar::handle:vertical {
-    background: #a5a5a5;
+    background-color: #a5a5a5;
     border-radius: 5px;
+    min-height: 20px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #7f7f7f;
+    background-color: #7f7f7f;
 }
 
-/* 横向滚动条（如表格） */
 QScrollBar:horizontal {
-    background: #e0e0e0;
+    background-color: #e0e0e0;
     height: 10px;
     margin: 0px;
     border-radius: 5px;
 }
 
 QScrollBar::handle:horizontal {
-    background: #a5a5a5;
+    background-color: #a5a5a5;
     border-radius: 5px;
+    min-width: 20px;
 }
 
 QScrollBar::handle:horizontal:hover {
-    background: #7f7f7f;
+    background-color: #7f7f7f;
+}
+
+QScrollBar::add-line, QScrollBar::sub-line {
+    border: none;
+    background: none;
+}
+
+/* =========================
+   文本编辑框 - 白底黑字
+   ========================= */
+QTextEdit {
+    background-color: #ffffff;
+    color: #1f1f1f;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    padding: 6px;
+}
+
+/* =========================
+   对话框
+   ========================= */
+QDialog {
+    background-color: #ffffff;
+    color: #1f1f1f;
+}
+
+/* 登录窗口特殊样式 - 深色背景 */
+QDialog#LoginDialog {
+    background-color: #1f1f1f;
+}
+
+QMessageBox {
+    background-color: #ffffff;
+    color: #1f1f1f;
+}
+
+QMessageBox QLabel {
+    color: #1f1f1f;
 }

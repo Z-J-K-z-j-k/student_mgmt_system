@@ -2,9 +2,19 @@
 import sys
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
-from .utils.api_client import APIClient
-from .login_window import LoginWindow
-from .main_window import MainWindow
+
+# 兼容直接运行脚本（python student_mgmt/client/main.py）
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.append(str(project_root))
+    from client.utils.api_client import APIClient
+    from client.login_window import LoginWindow
+    from client.main_window import MainWindow
+else:
+    from .utils.api_client import APIClient
+    from .login_window import LoginWindow
+    from .main_window import MainWindow
 
 def load_qss(app):
     qss_path = Path(__file__).parent / "resources" / "style.qss"
@@ -17,18 +27,10 @@ def main():
     load_qss(app)
 
     api = APIClient()
-    main_win = MainWindow(api)
-
-    def on_login_success():
-        login_win.close()
-        main_win.lbl_user.setText(f"当前用户：{api.real_name}（{api.role}）")
-        main_win.show()
-
-    login_win = LoginWindow(api, on_login_success)
+    # 只加载登录窗口，登录成功后由login_window根据角色打开对应的主界面
+    login_win = LoginWindow(api, None)
     login_win.show()
-
-
-    login_win.show()
+    
     sys.exit(app.exec())
 
 if __name__ == "__main__":
