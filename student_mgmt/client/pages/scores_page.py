@@ -55,6 +55,10 @@ class ScoresPage(QWidget):
             admin_layout = QHBoxLayout()
             admin_layout.addWidget(QLabel("管理员操作："))
             
+            self.btn_refresh = QPushButton("刷新")
+            self.btn_refresh.clicked.connect(self.refresh)
+            admin_layout.addWidget(self.btn_refresh)
+            
             self.btn_edit = QPushButton("修改所选成绩")
             self.btn_edit.clicked.connect(self.edit_score)
             admin_layout.addWidget(self.btn_edit)
