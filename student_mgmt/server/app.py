@@ -1664,20 +1664,45 @@ def list_scores():
     
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(f"""
-        SELECT sc.score_id, s.student_id, s.name AS student_name,
-               c.course_id, c.course_name, c.semester, c.credit,
-               sc.score, sc.exam_date
-        FROM scores sc
-        JOIN students s ON sc.student_id = s.student_id
-        JOIN courses c  ON sc.course_id = c.course_id
-        {where_sql}
-        ORDER BY sc.score_id DESC
-        """, params)
-        rows = cur.fetchall()
-    return jsonify({"status": "ok", "data": [dict(r) for r in rows]})
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            # 使用 COALESCE 兼容没有 version 字段的情况
+            cur.execute(f"""
+            SELECT sc.score_id, s.student_id, s.name AS student_name,
+                   c.course_id, c.course_name, c.semester, c.credit,
+                   sc.score, sc.exam_date, COALESCE(sc.version, 1) AS version
+            FROM scores sc
+            JOIN students s ON sc.student_id = s.student_id
+            JOIN courses c  ON sc.course_id = c.course_id
+            {where_sql}
+            ORDER BY sc.score_id DESC
+            """, params)
+            rows = cur.fetchall()
+        return jsonify({"status": "ok", "data": [dict(r) for r in rows]})
+    except Exception as e:
+        # 如果查询失败（可能是 version 字段不存在），尝试不查询 version
+        try:
+            with get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute(f"""
+                SELECT sc.score_id, s.student_id, s.name AS student_name,
+                       c.course_id, c.course_name, c.semester, c.credit,
+                       sc.score, sc.exam_date
+                FROM scores sc
+                JOIN students s ON sc.student_id = s.student_id
+                JOIN courses c  ON sc.course_id = c.course_id
+                {where_sql}
+                ORDER BY sc.score_id DESC
+                """, params)
+                rows = cur.fetchall()
+                # 为每条记录添加默认版本号
+                for row in rows:
+                    if 'version' not in row:
+                        row['version'] = 1
+            return jsonify({"status": "ok", "data": [dict(r) for r in rows]})
+        except Exception as e2:
+            return jsonify({"status": "error", "msg": f"获取成绩失败：{str(e2)}"}), 500
 
 @app.route("/api/scores", methods=["POST"])
 def add_score():
@@ -1704,11 +1729,27 @@ def add_score():
             if existing:
                 return jsonify({"status": "error", "msg": "已选该课程"}), 400
             
-            # 插入选课记录（score 和 exam_date 可以为 NULL）
+            # 检查 version 字段是否存在
             cur.execute("""
-            INSERT INTO scores (student_id, course_id, score, exam_date)
-            VALUES (%s, %s, %s, %s)
-            """, (student_id, course_id, score, exam_date))
+                SELECT COUNT(*) as cnt
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'scores'
+                  AND COLUMN_NAME = 'version'
+            """)
+            has_version = cur.fetchone().get('cnt', 0) > 0
+            
+            # 插入选课记录（score 和 exam_date 可以为 NULL）
+            if has_version:
+                cur.execute("""
+                INSERT INTO scores (student_id, course_id, score, exam_date, version)
+                VALUES (%s, %s, %s, %s, 1)
+                """, (student_id, course_id, score, exam_date))
+            else:
+                cur.execute("""
+                INSERT INTO scores (student_id, course_id, score, exam_date)
+                VALUES (%s, %s, %s, %s)
+                """, (student_id, course_id, score, exam_date))
             conn.commit()
             
         return jsonify({"status": "ok"})
@@ -1759,7 +1800,7 @@ def get_teacher_scores():
         else:
             student_id = None
 
-        # 构建查询
+        # 构建查询（包含版本号，使用 COALESCE 兼容没有 version 字段的情况）
         cur.execute(
             """
             SELECT
@@ -1768,7 +1809,8 @@ def get_teacher_scores():
                 st.name AS student_name,
                 c.course_name,
                 s.score,
-                c.semester
+                c.semester,
+                COALESCE(s.version, 1) AS version
             FROM scores s
             JOIN students st ON s.student_id = st.student_id
             JOIN courses c   ON s.course_id = c.course_id
@@ -1786,7 +1828,9 @@ def get_teacher_scores():
 
 @app.route("/api/scores/<int:eid>", methods=["PUT"])
 def update_score(eid):
-    """更新成绩（教师只能更新自己课程的成绩）"""
+    """更新成绩（教师只能更新自己课程的成绩）
+    使用悲观锁（SELECT FOR UPDATE）和乐观锁（版本号）双重保护
+    """
     token = request.headers.get("X-Token", "")
     user = _get_user_from_token(token)
     if not user:
@@ -1795,11 +1839,13 @@ def update_score(eid):
     data = request.json or {}
     score = data.get("score")
     exam_date = data.get("exam_date")
+    expected_version = data.get("version")  # 乐观锁：期望的版本号
 
     if score is None:
         return jsonify({"status": "error", "msg": "成绩不能为空"}), 400
 
-    with get_conn() as conn:
+    # 使用 REPEATABLE READ 隔离级别和悲观锁
+    with get_conn(isolation_level='REPEATABLE READ') as conn:
         cur = conn.cursor()
 
         # 如果是教师，需要验证该课程属于该教师
@@ -1817,13 +1863,14 @@ def update_score(eid):
 
             teacher_id = teacher_row["teacher_id"]
 
-            # 验证该成绩记录对应的课程属于当前教师
+            # 使用悲观锁：SELECT FOR UPDATE 锁定行，防止并发修改
             cur.execute(
                 """
-                SELECT s.score_id, s.score AS old_score, c.course_id
+                SELECT s.score_id, s.score AS old_score, COALESCE(s.version, 1) AS version, c.course_id
                 FROM scores s
                 JOIN courses c ON s.course_id = c.course_id
                 WHERE s.score_id = %s AND c.teacher_id = %s
+                FOR UPDATE
                 """,
                 (eid, teacher_id),
             )
@@ -1832,11 +1879,15 @@ def update_score(eid):
                 return jsonify({"status": "error", "msg": "无权修改该成绩或成绩不存在"}), 403
 
             old_score = score_row["old_score"]
+            current_version = score_row.get("version", 1)
         else:
-            # 管理员可以修改任何成绩，但需要先查询旧成绩用于日志
+            # 管理员可以修改任何成绩，使用悲观锁锁定行
             cur.execute(
                 """
-                SELECT score_id, score AS old_score FROM scores WHERE score_id = %s
+                SELECT score_id, score AS old_score, COALESCE(version, 1) AS version
+                FROM scores
+                WHERE score_id = %s
+                FOR UPDATE
                 """,
                 (eid,),
             )
@@ -1845,26 +1896,79 @@ def update_score(eid):
                 return jsonify({"status": "error", "msg": "成绩不存在"}), 404
 
             old_score = score_row["old_score"]
+            current_version = score_row.get("version", 1)
 
-        # 更新成绩
-        if exam_date:
-            cur.execute(
-                """
-                UPDATE scores
-                SET score = %s, exam_date = %s
-                WHERE score_id = %s
-                """,
-                (score, exam_date, eid),
-            )
+        # 乐观锁检查：如果提供了版本号，验证版本是否匹配
+        if expected_version is not None:
+            if current_version != expected_version:
+                return jsonify({
+                    "status": "error",
+                    "msg": "数据已被其他用户修改，请刷新后重试",
+                    "current_version": current_version
+                }), 409  # 409 Conflict
+
+        # 更新成绩，同时更新版本号（乐观锁）
+        # 如果 version 字段不存在，只更新成绩，不更新版本号
+        new_version = current_version + 1
+        
+        # 检查 version 字段是否存在
+        cur.execute("""
+            SELECT COUNT(*) as cnt
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'scores'
+              AND COLUMN_NAME = 'version'
+        """)
+        has_version = cur.fetchone().get('cnt', 0) > 0
+        
+        if has_version:
+            # 有 version 字段，使用乐观锁
+            if exam_date:
+                cur.execute(
+                    """
+                    UPDATE scores
+                    SET score = %s, exam_date = %s, version = %s
+                    WHERE score_id = %s AND version = %s
+                    """,
+                    (score, exam_date, new_version, eid, current_version),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE scores
+                    SET score = %s, version = %s
+                    WHERE score_id = %s AND version = %s
+                    """,
+                    (score, new_version, eid, current_version),
+                )
+            
+            # 检查是否成功更新（乐观锁：如果版本不匹配，rowcount 为 0）
+            if cur.rowcount == 0:
+                return jsonify({
+                    "status": "error",
+                    "msg": "更新失败：数据已被其他用户修改，请刷新后重试"
+                }), 409
         else:
-            cur.execute(
-                """
-                UPDATE scores
-                SET score = %s
-                WHERE score_id = %s
-                """,
-                (score, eid),
-            )
+            # 没有 version 字段，只更新成绩（仅使用悲观锁）
+            if exam_date:
+                cur.execute(
+                    """
+                    UPDATE scores
+                    SET score = %s, exam_date = %s
+                    WHERE score_id = %s
+                    """,
+                    (score, exam_date, eid),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE scores
+                    SET score = %s
+                    WHERE score_id = %s
+                    """,
+                    (score, eid),
+                )
+            new_version = current_version  # 保持原版本号
 
         # 记录操作日志
         if user.get("user_id"):
@@ -1876,13 +1980,13 @@ def update_score(eid):
                 (
                     user["user_id"],
                     eid,
-                    f"score changed from {old_score} to {score}",
+                    f"score changed from {old_score} to {score} (version {current_version} -> {new_version})",
                 ),
             )
 
         conn.commit()
 
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "version": new_version})
 
 @app.route("/api/scores", methods=["DELETE"])
 def delete_score():
@@ -1938,60 +2042,108 @@ def batch_import_scores():
         error_count = 0
         errors = []
         
-        with get_conn() as conn:
+        # 使用 SERIALIZABLE 隔离级别和表锁，确保批量操作的原子性
+        with get_conn(isolation_level='SERIALIZABLE') as conn:
             cur = conn.cursor()
             
-            for idx, score_item in enumerate(scores_data):
-                try:
-                    student_id = score_item.get("student_id")
-                    course_id = score_item.get("course_id")
-                    score = score_item.get("score")
-                    exam_date = score_item.get("exam_date")
-                    
-                    if not student_id or not course_id:
-                        error_count += 1
-                        errors.append(f"第{idx+1}条：学生ID和课程ID不能为空")
-                        continue
-                    
-                    # 检查学生和课程是否存在
-                    cur.execute("SELECT student_id FROM students WHERE student_id=%s", (student_id,))
-                    if not cur.fetchone():
-                        error_count += 1
-                        errors.append(f"第{idx+1}条：学生ID {student_id} 不存在")
-                        continue
-                    
-                    cur.execute("SELECT course_id FROM courses WHERE course_id=%s", (course_id,))
-                    if not cur.fetchone():
-                        error_count += 1
-                        errors.append(f"第{idx+1}条：课程ID {course_id} 不存在")
-                        continue
-                    
-                    # 检查是否已存在该选课记录
-                    cur.execute("""
-                        SELECT score_id FROM scores 
-                        WHERE student_id=%s AND course_id=%s
-                    """, (student_id, course_id))
-                    existing = cur.fetchone()
-                    
-                    if existing:
-                        # 如果已存在，更新成绩
-                        cur.execute("""
-                            UPDATE scores 
-                            SET score=%s, exam_date=%s
-                            WHERE student_id=%s AND course_id=%s
-                        """, (score, exam_date, student_id, course_id))
-                        success_count += 1
-                    else:
-                        # 如果不存在，插入新记录
-                        cur.execute("""
-                            INSERT INTO scores (student_id, course_id, score, exam_date)
-                            VALUES (%s, %s, %s, %s)
-                        """, (student_id, course_id, score, exam_date))
-                        success_count += 1
+            # 检查 version 字段是否存在
+            cur.execute("""
+                SELECT COUNT(*) as cnt
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'scores'
+                  AND COLUMN_NAME = 'version'
+            """)
+            has_version = cur.fetchone().get('cnt', 0) > 0
+            
+            # 获取表级锁（防止并发批量操作冲突）
+            cur.execute("LOCK TABLES scores WRITE, students READ, courses READ")
+            
+            try:
+                for idx, score_item in enumerate(scores_data):
+                    try:
+                        student_id = score_item.get("student_id")
+                        course_id = score_item.get("course_id")
+                        score = score_item.get("score")
+                        exam_date = score_item.get("exam_date")
                         
-                except Exception as e:
-                    error_count += 1
-                    errors.append(f"第{idx+1}条：{str(e)}")
+                        if not student_id or not course_id:
+                            error_count += 1
+                            errors.append(f"第{idx+1}条：学生ID和课程ID不能为空")
+                            continue
+                        
+                        # 检查学生和课程是否存在
+                        cur.execute("SELECT student_id FROM students WHERE student_id=%s", (student_id,))
+                        if not cur.fetchone():
+                            error_count += 1
+                            errors.append(f"第{idx+1}条：学生ID {student_id} 不存在")
+                            continue
+                        
+                        cur.execute("SELECT course_id FROM courses WHERE course_id=%s", (course_id,))
+                        if not cur.fetchone():
+                            error_count += 1
+                            errors.append(f"第{idx+1}条：课程ID {course_id} 不存在")
+                            continue
+                        
+                        # 使用悲观锁检查是否已存在该选课记录
+                        if has_version:
+                            cur.execute("""
+                                SELECT score_id, COALESCE(version, 1) AS version FROM scores 
+                                WHERE student_id=%s AND course_id=%s
+                                FOR UPDATE
+                            """, (student_id, course_id))
+                        else:
+                            cur.execute("""
+                                SELECT score_id FROM scores 
+                                WHERE student_id=%s AND course_id=%s
+                                FOR UPDATE
+                            """, (student_id, course_id))
+                        existing = cur.fetchone()
+                        
+                        if existing:
+                            # 如果已存在，更新成绩
+                            if has_version:
+                                # 有 version 字段，使用乐观锁
+                                current_version = existing.get("version", 1)
+                                new_version = current_version + 1
+                                cur.execute("""
+                                    UPDATE scores 
+                                    SET score=%s, exam_date=%s, version=%s
+                                    WHERE student_id=%s AND course_id=%s AND version=%s
+                                """, (score, exam_date, new_version, student_id, course_id, current_version))
+                                if cur.rowcount > 0:
+                                    success_count += 1
+                                else:
+                                    error_count += 1
+                                    errors.append(f"第{idx+1}条：更新失败（版本冲突）")
+                            else:
+                                # 没有 version 字段，直接更新
+                                cur.execute("""
+                                    UPDATE scores 
+                                    SET score=%s, exam_date=%s
+                                    WHERE student_id=%s AND course_id=%s
+                                """, (score, exam_date, student_id, course_id))
+                                success_count += 1
+                        else:
+                            # 如果不存在，插入新记录
+                            if has_version:
+                                cur.execute("""
+                                    INSERT INTO scores (student_id, course_id, score, exam_date, version)
+                                    VALUES (%s, %s, %s, %s, 1)
+                                """, (student_id, course_id, score, exam_date))
+                            else:
+                                cur.execute("""
+                                    INSERT INTO scores (student_id, course_id, score, exam_date)
+                                    VALUES (%s, %s, %s, %s)
+                                """, (student_id, course_id, score, exam_date))
+                            success_count += 1
+                            
+                    except Exception as e:
+                        error_count += 1
+                        errors.append(f"第{idx+1}条：{str(e)}")
+            finally:
+                # 释放表锁
+                cur.execute("UNLOCK TABLES")
             
             # 记录操作日志
             if user.get("user_id") and success_count > 0:
@@ -2039,57 +2191,67 @@ def cleanup_abnormal_scores():
         deleted_count = 0
         details = []
         
-        with get_conn() as conn:
+        # 使用 SERIALIZABLE 隔离级别和表锁，确保清理操作的原子性
+        with get_conn(isolation_level='SERIALIZABLE') as conn:
             cur = conn.cursor()
             
-            # 清理空成绩（score为NULL的记录）
-            if cleanup_empty:
-                cur.execute("""
-                    SELECT score_id, student_id, course_id 
-                    FROM scores 
-                    WHERE score IS NULL
-                """)
-                empty_scores = cur.fetchall()
-                
-                if empty_scores:
-                    cur.execute("DELETE FROM scores WHERE score IS NULL")
-                    deleted_count += cur.rowcount
-                    details.append(f"清理空成绩：{cur.rowcount}条")
+            # 获取表级写锁（防止并发清理操作冲突）
+            cur.execute("LOCK TABLES scores WRITE")
             
-            # 清理重复成绩（同一学生同一课程有多条记录，保留score_id最大的）
-            if cleanup_duplicates:
-                cur.execute("""
-                    SELECT student_id, course_id, COUNT(*) as cnt
-                    FROM scores
-                    GROUP BY student_id, course_id
-                    HAVING cnt > 1
-                """)
-                duplicates = cur.fetchall()
-                
-                if duplicates:
-                    total_deleted = 0
-                    for dup in duplicates:
-                        student_id = dup["student_id"]
-                        course_id = dup["course_id"]
-                        # 先获取要保留的score_id（最大的）
-                        cur.execute("""
-                            SELECT MAX(score_id) as max_score_id
-                            FROM scores
-                            WHERE student_id=%s AND course_id=%s
-                        """, (student_id, course_id))
-                        max_row = cur.fetchone()
-                        if max_row and max_row["max_score_id"]:
-                            max_score_id = max_row["max_score_id"]
-                            # 删除除最大score_id外的所有记录
-                            cur.execute("""
-                                DELETE FROM scores
-                                WHERE student_id=%s AND course_id=%s
-                                AND score_id != %s
-                            """, (student_id, course_id, max_score_id))
-                            total_deleted += cur.rowcount
+            try:
+                # 清理空成绩（score为NULL的记录）
+                if cleanup_empty:
+                    cur.execute("""
+                        SELECT score_id, student_id, course_id 
+                        FROM scores 
+                        WHERE score IS NULL
+                        FOR UPDATE
+                    """)
+                    empty_scores = cur.fetchall()
                     
-                    deleted_count += total_deleted
-                    details.append(f"清理重复成绩：{len(duplicates)}组，共删除{total_deleted}条")
+                    if empty_scores:
+                        cur.execute("DELETE FROM scores WHERE score IS NULL")
+                        deleted_count += cur.rowcount
+                        details.append(f"清理空成绩：{cur.rowcount}条")
+                
+                # 清理重复成绩（同一学生同一课程有多条记录，保留score_id最大的）
+                if cleanup_duplicates:
+                    cur.execute("""
+                        SELECT student_id, course_id, COUNT(*) as cnt
+                        FROM scores
+                        GROUP BY student_id, course_id
+                        HAVING cnt > 1
+                    """)
+                    duplicates = cur.fetchall()
+                    
+                    if duplicates:
+                        total_deleted = 0
+                        for dup in duplicates:
+                            student_id = dup["student_id"]
+                            course_id = dup["course_id"]
+                            # 使用悲观锁获取要保留的score_id（最大的）
+                            cur.execute("""
+                                SELECT MAX(score_id) as max_score_id
+                                FROM scores
+                                WHERE student_id=%s AND course_id=%s
+                                FOR UPDATE
+                            """, (student_id, course_id))
+                            max_row = cur.fetchone()
+                            if max_row and max_row["max_score_id"]:
+                                max_score_id = max_row["max_score_id"]
+                                # 删除除最大score_id外的所有记录
+                                cur.execute("""
+                                    DELETE FROM scores
+                                    WHERE student_id=%s AND course_id=%s
+                                    AND score_id != %s
+                                """, (student_id, course_id, max_score_id))
+                                total_deleted += cur.rowcount
+                        
+                        deleted_count += total_deleted
+                        details.append(f"清理重复成绩：{len(duplicates)}组，共删除{total_deleted}条")
+            finally:
+                # 释放表锁
+                cur.execute("UNLOCK TABLES")
             
             # 记录操作日志
             if user.get("user_id") and deleted_count > 0:

@@ -1,7 +1,7 @@
 # client/pages/teacher_my_courses_page.py
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
-    QMessageBox, QPushButton, QHBoxLayout, QLabel
+    QMessageBox, QPushButton, QHBoxLayout, QLabel, QLineEdit
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -14,6 +14,7 @@ class TeacherMyCoursesPage(QWidget):
         self.user_id = user_id
 
         layout = QVBoxLayout(self)
+        self.current_courses = []
 
         title_layout = QHBoxLayout()
         title = QLabel("📘 我教授的课程")
@@ -25,6 +26,25 @@ class TeacherMyCoursesPage(QWidget):
         self.btn_refresh.clicked.connect(self.refresh)
         title_layout.addWidget(self.btn_refresh)
         layout.addLayout(title_layout)
+
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("检索："))
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("输入课程号/课程名/学期关键字")
+        self.search_input.textChanged.connect(self.apply_search_filter)
+        search_layout.addWidget(self.search_input)
+
+        self.btn_search = QPushButton("搜索")
+        self.btn_search.clicked.connect(self.apply_search_filter)
+        search_layout.addWidget(self.btn_search)
+
+        self.btn_clear = QPushButton("清空")
+        self.btn_clear.clicked.connect(self.clear_search)
+        search_layout.addWidget(self.btn_clear)
+
+        search_layout.addStretch()
+        layout.addLayout(search_layout)
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
@@ -56,7 +76,37 @@ class TeacherMyCoursesPage(QWidget):
             QMessageBox.warning(self, "错误", data.get("msg", "未知错误"))
             return
 
-        courses = data.get("data", [])
+        self.current_courses = data.get("data", [])
+        self.apply_search_filter()
+
+    def clear_search(self):
+        """清空检索条件"""
+        self.search_input.clear()
+        self.apply_search_filter()
+
+    def apply_search_filter(self):
+        """根据关键字过滤课程"""
+        if not hasattr(self, "current_courses"):
+            return
+
+        keyword = self.search_input.text().strip().lower()
+        if not keyword:
+            filtered = self.current_courses
+        else:
+            def match(course):
+                targets = [
+                    str(course.get("course_id", "")),
+                    course.get("course_name", ""),
+                    str(course.get("semester", "")),
+                ]
+                return any(keyword in (t or "").lower() for t in targets)
+
+            filtered = [course for course in self.current_courses if match(course)]
+
+        self.populate_table(filtered)
+
+    def populate_table(self, courses):
+        """渲染课程表格"""
         self.table.setRowCount(len(courses))
 
         for i, course in enumerate(courses):
@@ -74,8 +124,4 @@ class TeacherMyCoursesPage(QWidget):
 
             for col_idx, item in enumerate(items):
                 self.table.setItem(i, col_idx, item)
-
-        if not courses:
-            # 不显示消息框，避免干扰用户
-            pass
 

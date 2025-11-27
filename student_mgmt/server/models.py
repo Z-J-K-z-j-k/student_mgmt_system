@@ -1,27 +1,175 @@
 # server/models.py
 import pymysql
 from contextlib import contextmanager
+import threading
+import queue
+import time
 from .config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE, MYSQL_CHARSET
 
 # 配置 pymysql 以支持字典格式返回结果
 pymysql.install_as_MySQLdb()
 
+# ============================================================
+# 连接池配置
+# ============================================================
+# 连接池配置参数
+POOL_MIN_SIZE = 2      # 最小连接数
+POOL_MAX_SIZE = 20     # 最大连接数
+POOL_IDLE_TIMEOUT = 300  # 空闲连接超时时间（秒）
+POOL_TIMEOUT = 10      # 获取连接超时时间（秒）
+
+class ConnectionPool:
+    """简单的数据库连接池实现"""
+    def __init__(self, min_size=2, max_size=20, idle_timeout=300):
+        self.min_size = min_size
+        self.max_size = max_size
+        self.idle_timeout = idle_timeout
+        self._pool = queue.Queue(maxsize=max_size)
+        self._created = 0
+        self._lock = threading.Lock()
+        self._connection_info = {
+            'host': MYSQL_HOST,
+            'port': MYSQL_PORT,
+            'user': MYSQL_USER,
+            'password': MYSQL_PASSWORD,
+            'database': MYSQL_DATABASE,
+            'charset': MYSQL_CHARSET,
+            'cursorclass': pymysql.cursors.DictCursor,
+            'autocommit': False
+        }
+        # 预创建最小连接数
+        self._initialize_pool()
+    
+    def _initialize_pool(self):
+        """初始化连接池，创建最小连接数"""
+        for _ in range(self.min_size):
+            conn = self._create_connection()
+            if conn:
+                self._pool.put((conn, time.time()))
+    
+    def _create_connection(self):
+        """创建新的数据库连接"""
+        try:
+            conn = pymysql.connect(**self._connection_info)
+            self._created += 1
+            return conn
+        except Exception as e:
+            print(f"创建数据库连接失败: {e}")
+            return None
+    
+    def _is_connection_alive(self, conn):
+        """检查连接是否存活"""
+        try:
+            conn.ping(reconnect=False)
+            return True
+        except:
+            return False
+    
+    def get_connection(self, timeout=POOL_TIMEOUT):
+        """从连接池获取连接"""
+        try:
+            # 尝试从池中获取连接
+            conn, last_used = self._pool.get(timeout=timeout)
+            
+            # 检查连接是否存活或超时
+            if not self._is_connection_alive(conn) or (time.time() - last_used) > self.idle_timeout:
+                try:
+                    conn.close()
+                except:
+                    pass
+                with self._lock:
+                    self._created -= 1
+                conn = self._create_connection()
+                if not conn:
+                    raise Exception("无法创建数据库连接")
+            
+            return conn
+        except queue.Empty:
+            # 池为空，尝试创建新连接
+            with self._lock:
+                if self._created < self.max_size:
+                    conn = self._create_connection()
+                    if conn:
+                        return conn
+            # 达到最大连接数，等待（使用更短的超时时间避免无限等待）
+            try:
+                conn, _ = self._pool.get(timeout=min(timeout, 5))
+                return conn
+            except queue.Empty:
+                raise Exception(f"无法获取数据库连接：连接池已满（{self._created}/{self.max_size}）")
+    
+    def release_connection(self, conn):
+        """将连接归还到连接池"""
+        if conn:
+            try:
+                # 检查连接是否仍然有效
+                if self._is_connection_alive(conn):
+                    # 重置连接状态
+                    conn.rollback()
+                    self._pool.put((conn, time.time()), timeout=1)
+                else:
+                    # 连接已失效，关闭它
+                    try:
+                        conn.close()
+                    except:
+                        pass
+                    with self._lock:
+                        self._created -= 1
+            except queue.Full:
+                # 池已满，关闭连接
+                try:
+                    conn.close()
+                except:
+                    pass
+                with self._lock:
+                    self._created -= 1
+
+# 全局连接池（延迟初始化）
+_db_pool = None
+_pool_lock = threading.Lock()
+
+def _init_pool():
+    """初始化数据库连接池"""
+    global _db_pool
+    if _db_pool is None:
+        with _pool_lock:
+            if _db_pool is None:
+                _db_pool = ConnectionPool(
+                    min_size=POOL_MIN_SIZE,
+                    max_size=POOL_MAX_SIZE,
+                    idle_timeout=POOL_IDLE_TIMEOUT
+                )
+    return _db_pool
+
+def get_pool():
+    """获取连接池实例"""
+    return _init_pool()
+
 @contextmanager
-def get_conn():
+def get_conn(isolation_level=None):
     """
-    获取 MySQL 数据库连接的上下文管理器
+    获取 MySQL 数据库连接的上下文管理器（使用连接池）
     支持事务自动提交和回滚
+    
+    Args:
+        isolation_level: 事务隔离级别，可选值：
+            - 'READ UNCOMMITTED'
+            - 'READ COMMITTED'
+            - 'REPEATABLE READ' (默认)
+            - 'SERIALIZABLE'
     """
-    conn = pymysql.connect(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        database=MYSQL_DATABASE,
-        charset=MYSQL_CHARSET,
-        cursorclass=pymysql.cursors.DictCursor,  # 返回字典格式
-        autocommit=False  # 手动控制事务
-    )
+    pool = get_pool()
+    conn = pool.get_connection()
+    
+    # 设置事务隔离级别
+    if isolation_level:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SET SESSION TRANSACTION ISOLATION LEVEL {isolation_level}")
+        except Exception as e:
+            pool.release_connection(conn)
+            raise
+    
     try:
         yield conn
         conn.commit()
@@ -29,7 +177,7 @@ def get_conn():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        pool.release_connection(conn)
 
 def create_database_if_not_exists():
     """
@@ -201,7 +349,7 @@ def create_tables_default():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
         
-        # 成绩表
+        # 成绩表（包含版本字段用于乐观锁）
         cur.execute("""
         CREATE TABLE IF NOT EXISTS scores (
             score_id INT PRIMARY KEY AUTO_INCREMENT,
@@ -209,6 +357,7 @@ def create_tables_default():
             course_id INT NOT NULL,
             score FLOAT,
             exam_date DATE,
+            version INT DEFAULT 1 NOT NULL,
             UNIQUE KEY uniq_student_course (student_id, course_id),
             FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
             FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE

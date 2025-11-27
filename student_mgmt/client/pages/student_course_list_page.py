@@ -2,7 +2,7 @@
 from functools import partial
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QMessageBox, QPushButton, QLabel, QHeaderView
+    QMessageBox, QPushButton, QLabel, QHeaderView, QLineEdit
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -24,13 +24,22 @@ class StudentCourseListPage(QWidget):
         title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1f1f1f;")
         layout.addWidget(title)
 
-        # 刷新按钮
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
+        # 搜索与刷新
+        control_layout = QHBoxLayout()
+        control_layout.addWidget(QLabel("搜索关键词："))
+        self.input_keyword = QLineEdit()
+        self.input_keyword.setPlaceholderText("课程名 / 课程号 / 教师名")
+        self.input_keyword.returnPressed.connect(self.refresh)
+        control_layout.addWidget(self.input_keyword)
+
+        self.btn_search = QPushButton("搜索")
+        self.btn_search.clicked.connect(self.refresh)
+        control_layout.addWidget(self.btn_search)
+
         self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.clicked.connect(self.refresh)
-        btn_layout.addWidget(self.btn_refresh)
-        layout.addLayout(btn_layout)
+        self.btn_refresh.clicked.connect(self._reset_and_refresh)
+        control_layout.addWidget(self.btn_refresh)
+        layout.addLayout(control_layout)
 
         # 课程表格
         self.table = QTableWidget()
@@ -85,7 +94,11 @@ class StudentCourseListPage(QWidget):
             self.load_selected_courses()
 
             try:
-                resp = self.api.get("/api/courses")
+                params = {"page": 1, "page_size": 1000}
+                keyword = self.input_keyword.text().strip() if hasattr(self, "input_keyword") else ""
+                if keyword:
+                    params["keyword"] = keyword
+                resp = self.api.get("/api/courses", params=params)
                 data = resp.json()
             except Exception as e:
                 try:
@@ -232,4 +245,10 @@ class StudentCourseListPage(QWidget):
             except Exception:
                 # 其他异常也忽略，避免崩溃
                 print(f"选课时出错：{e}")
+
+    def _reset_and_refresh(self):
+        """清空搜索条件并刷新"""
+        if hasattr(self, "input_keyword"):
+            self.input_keyword.clear()
+        self.refresh()
 

@@ -1,0 +1,11 @@
+INSERT INTO students (student_id, user_id, name, gender, age, major, grade, class_name, phone, email, gpa) VALUES接下来是这个，帮我写一个生成.sql的py脚本呗：student的user_id是从61~660，student_id对应为2023213xxx（xxx为user_id-60）；name按照之前那个表来""邓紫棋","华晨宇","薛之谦",..."；gender随机分男女算了；age随机分(19~23岁中)；专业这样：总共600人按照user_id1~100为智能科学与技术、101~200为电子信息工程、201~400为物联网工程、401~600为电信工程及管理；grade都是3；class_name按照20232151xx，其中xx为01,02,...,25人一个班这样来分；phone都写19807312088；email为student_id@bupt.edu.cn；gpa正态分布(3.1~4);这是例子：”INSERT INTO students (student_id, user_id, name, gender, age, major, grade, class_name, phone, email, gpa) VALUES
+(1, 1, '蔡徐坤', 'male', 20, '计算机科学与技术', 2, '2班', '13800000001', 'student1@example.com', 3.7),
+(2, 2, '王俊凯', 'male', 19, '计算机科学与技术', 1, '1班', '13800000002', 'student2@example.com', 3.4),
+(3, 3, '王源', 'male', 20, '人工智能', 2, '2班', '13800000003', 'student3@example.com', 3.6),
+(4, 4, '易烊千玺', 'male', 21, '软件工程', 3, '3班', '13800000004', 'student4@example.com', 3.8),
+(5, 5, '邓紫棋', 'female', 20, '网络空间安全', 2, '2班', '13800000005', 'student5@example.com', 3.9),
+(6, 6, '林俊杰', 'male', 22, '计算机科学与技术', 4, '4班', '13800000006', 'student6@example.com', 3.5),
+(7, 7, '周杰伦', 'male', 23, '人工智能', 4, '4班', '13800000007', 'student7@example.com', 3.2),
+(8, 8, '孙燕姿', 'female', 21, '软件工程', 3, '3班', '13800000008', 'student8@example.com', 3.8),
+(9, 9, '张国荣', 'male', 22, '网络空间安全', 4, '4班', '13800000009', 'student9@example.com', 3.6),
+(10, 10, '陈奕迅', 'male', 20, '计算机科学与技术', 2, '2班', '13800000010', 'student10@example.com', 3.3);“

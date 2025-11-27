@@ -17,6 +17,7 @@ class ScoresPage(QWidget):
         self.api = api
         self.role = role
         self.user_id = user_id
+        self.current_scores = []
 
         layout = QVBoxLayout(self)
 
@@ -93,6 +94,16 @@ class ScoresPage(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
+        quick_filter_layout = QHBoxLayout()
+        quick_filter_layout.addWidget(QLabel("表格检索："))
+
+        self.quick_filter_input = QLineEdit()
+        self.quick_filter_input.setPlaceholderText("输入学号/姓名/课程/学期关键字快速筛选")
+        self.quick_filter_input.textChanged.connect(self.apply_quick_filter)
+        quick_filter_layout.addWidget(self.quick_filter_input)
+        quick_filter_layout.addStretch()
+
+        layout.addLayout(quick_filter_layout)
         layout.addWidget(self.table)
 
         self.refresh()
@@ -134,8 +145,34 @@ class ScoresPage(QWidget):
             QMessageBox.warning(self, "错误", data.get("msg", "未知错误"))
             return
 
-        scores = data.get("data", [])
-        
+        self.current_scores = data.get("data", [])
+        self.apply_quick_filter()
+
+    def apply_quick_filter(self):
+        """根据关键字快速筛选表格数据"""
+        if not hasattr(self, "current_scores"):
+            return
+
+        keyword = self.quick_filter_input.text().strip().lower()
+        if not keyword:
+            filtered = self.current_scores
+        else:
+            def match(item):
+                targets = [
+                    str(item.get("student_id", "")),
+                    item.get("student_name", ""),
+                    item.get("course_name", ""),
+                    str(item.get("score", "")),
+                    str(item.get("semester", "")),
+                ]
+                return any(keyword in (t or "").lower() for t in targets)
+
+            filtered = [score for score in self.current_scores if match(score)]
+
+        self.populate_scores(filtered)
+
+    def populate_scores(self, scores):
+        """渲染成绩表格"""
         self.table.setRowCount(len(scores))
         for i, s in enumerate(scores):
             score_value = s.get("score")

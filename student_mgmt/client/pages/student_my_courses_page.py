@@ -2,7 +2,7 @@
 from functools import partial
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
-    QMessageBox, QPushButton, QHBoxLayout, QLabel, QHeaderView
+    QMessageBox, QPushButton, QHBoxLayout, QLabel, QHeaderView, QLineEdit
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -24,9 +24,21 @@ class StudentMyCoursesPage(QWidget):
         title_layout.addStretch()
 
         self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_refresh.clicked.connect(self._reset_and_refresh)
         title_layout.addWidget(self.btn_refresh)
         layout.addLayout(title_layout)
+
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("搜索关键词："))
+        self.input_keyword = QLineEdit()
+        self.input_keyword.setPlaceholderText("课程名 / 课程号")
+        self.input_keyword.returnPressed.connect(self.refresh)
+        search_layout.addWidget(self.input_keyword)
+
+        self.btn_search = QPushButton("搜索")
+        self.btn_search.clicked.connect(self.refresh)
+        search_layout.addWidget(self.btn_search)
+        layout.addLayout(search_layout)
 
         self.table = QTableWidget()
         self.table.setColumnCount(7)  # 添加操作列
@@ -67,8 +79,12 @@ class StudentMyCoursesPage(QWidget):
             return
 
         try:
+            params = {"student_id": str(self.student_id)}
+            keyword = self.input_keyword.text().strip() if hasattr(self, "input_keyword") else ""
+            if keyword:
+                params["course_name"] = keyword
             # 获取成绩记录，其中包含已选课程信息
-            resp = self.api.get("/api/scores", params={"student_id": str(self.student_id)})
+            resp = self.api.get("/api/scores", params=params)
             data = resp.json()
         except Exception as e:
             QMessageBox.critical(self, "错误", f"获取课程列表失败：{e}")
@@ -92,7 +108,7 @@ class StudentMyCoursesPage(QWidget):
 
         # 获取所有课程信息以补充教师和学分信息
         try:
-            courses_resp = self.api.get("/api/courses")
+            courses_resp = self.api.get("/api/courses", params={"page": 1, "page_size": 1000})
             courses_data = courses_resp.json()
             if courses_data.get("status") == "ok":
                 all_courses = courses_data.get("data", [])
@@ -212,4 +228,10 @@ class StudentMyCoursesPage(QWidget):
             except RuntimeError:
                 # 对象已被删除，忽略错误
                 pass
+
+    def _reset_and_refresh(self):
+        """清空搜索条件并刷新"""
+        if hasattr(self, "input_keyword"):
+            self.input_keyword.clear()
+        self.refresh()
 
