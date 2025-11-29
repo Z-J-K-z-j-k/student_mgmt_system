@@ -165,9 +165,10 @@ def _build_user_context(user):
         with get_conn() as conn:
             cur = conn.cursor()
             if role == "student":
+                # 获取学生基本信息
                 cur.execute(
                     """
-                    SELECT student_id, name, major, grade, class_name, gpa
+                    SELECT student_id, name, major, grade, class_name, gpa, phone, email
                     FROM students
                     WHERE user_id=%s
                     """,
@@ -178,6 +179,7 @@ def _build_user_context(user):
                     return ""
                 student_id = profile["student_id"]
                 summary = [
+                    f"【学生信息】",
                     f"姓名：{profile.get('name') or '未知'}",
                     f"专业：{profile.get('major') or '未填写'}",
                     f"年级：{profile.get('grade') or '未填写'}",
@@ -185,33 +187,91 @@ def _build_user_context(user):
                 ]
                 gpa = profile.get("gpa")
                 if gpa is not None:
-                    summary.append(f"GPA：{gpa}")
+                    summary.append(f"GPA：{gpa:.2f}")
 
+                # 获取所有成绩信息（用于分析）
                 cur.execute(
                     """
-                    SELECT c.course_name, sc.score
+                    SELECT c.course_name, c.credit, sc.score, sc.exam_date, cs.semester
                     FROM scores sc
-                    JOIN courses c ON sc.course_id = c.course_id
-                    WHERE sc.student_id=%s AND sc.score IS NOT NULL
-                    ORDER BY sc.exam_date DESC, sc.score DESC
+                    JOIN course_selection cs ON sc.selection_id = cs.selection_id
+                    JOIN courses c ON cs.course_id = c.course_id
+                    WHERE cs.student_id=%s AND sc.score IS NOT NULL
+                    ORDER BY sc.exam_date DESC
+                    """,
+                    (student_id,),
+                )
+                all_scores = cur.fetchall()
+                
+                if all_scores:
+                    # 计算统计信息
+                    total_credits = sum(row.get('credit', 0) or 0 for row in all_scores)
+                    total_score_weighted = sum((row.get('score', 0) or 0) * (row.get('credit', 0) or 0) for row in all_scores)
+                    weighted_avg = total_score_weighted / total_credits if total_credits > 0 else 0
+                    
+                    # 按分数段统计
+                    excellent = sum(1 for row in all_scores if (row.get('score') or 0) >= 90)
+                    good = sum(1 for row in all_scores if 80 <= (row.get('score') or 0) < 90)
+                    pass_count = sum(1 for row in all_scores if 60 <= (row.get('score') or 0) < 80)
+                    fail = sum(1 for row in all_scores if (row.get('score') or 0) < 60)
+                    
+                    summary.append(f"\n【成绩统计】")
+                    summary.append(f"已修课程数：{len(all_scores)}门")
+                    summary.append(f"总学分：{total_credits}")
+                    summary.append(f"加权平均分：{weighted_avg:.2f}分")
+                    summary.append(f"优秀(≥90分)：{excellent}门，良好(80-89分)：{good}门，及格(60-79分)：{pass_count}门，不及格(<60分)：{fail}门")
+                    
+                    # 最近5门课程成绩
+                    summary.append(f"\n【最近成绩】")
+                    recent_scores = all_scores[:5]
+                    for row in recent_scores:
+                        course_name = row.get('course_name', '未知')
+                        score = row.get('score', 0)
+                        credit = row.get('credit', 0) or 0
+                        semester = row.get('semester', '')
+                        info = f"{course_name}：{score}分（{credit}学分"
+                        if semester:
+                            info += f"，{semester}"
+                        info += "）"
+                        summary.append(info)
+                    
+                    # 薄弱科目（低于70分的课程）
+                    weak_courses = [row for row in all_scores if (row.get('score') or 0) < 70]
+                    if weak_courses:
+                        summary.append(f"\n【需要关注的课程】")
+                        for row in weak_courses[:5]:  # 最多显示5门
+                            summary.append(f"{row.get('course_name', '未知')}：{row.get('score', 0)}分")
+                
+                # 获取已选但未出成绩的课程
+                cur.execute(
+                    """
+                    SELECT c.course_name, c.credit, cs.semester
+                    FROM course_selection cs
+                    JOIN courses c ON cs.course_id = c.course_id
+                    LEFT JOIN scores sc ON sc.selection_id = cs.selection_id
+                    WHERE cs.student_id=%s AND sc.score IS NULL
+                    ORDER BY cs.semester DESC
                     LIMIT 5
                     """,
                     (student_id,),
                 )
-                courses = cur.fetchall()
-                if courses:
-                    course_summary = "; ".join(
-                        f"{row['course_name']} {row['score']}分"
-                        for row in courses
-                    )
-                    summary.append(f"最近成绩：{course_summary}")
-                return "；".join(summary)
+                pending_courses = cur.fetchall()
+                if pending_courses:
+                    summary.append(f"\n【待出成绩的课程】")
+                    for row in pending_courses:
+                        info = f"{row.get('course_name', '未知')}（{row.get('credit', 0)}学分"
+                        if row.get('semester'):
+                            info += f"，{row['semester']}"
+                        info += "）"
+                        summary.append(info)
+                
+                return "\n".join(summary)
 
             if role == "teacher":
                 # 获取教师基本信息
                 cur.execute(
                     """
-                    SELECT teacher_id, name, department, title, research
+                    SELECT teacher_id, name, department, title, research, phone, email
                     FROM teachers
                     WHERE user_id=%s
                     """,
@@ -223,7 +283,8 @@ def _build_user_context(user):
                 
                 teacher_id = profile["teacher_id"]
                 summary = [
-                    f"教师姓名：{profile.get('name') or '未知'}",
+                    f"【教师信息】",
+                    f"姓名：{profile.get('name') or '未知'}",
                     f"所属部门：{profile.get('department') or '未填写'}",
                     f"职称：{profile.get('title') or '未填写'}",
                 ]
@@ -233,21 +294,27 @@ def _build_user_context(user):
                 if research:
                     summary.append(f"研究方向：{research}")
                 
-                # 获取教师教授的课程及统计信息
+                # 获取教师教授的课程及详细统计信息
                 cur.execute(
                     """
                     SELECT
                         c.course_id,
                         c.course_name,
                         c.credit,
-                        c.semester,
-                        COUNT(s.score_id) AS total_students,
+                        cs.semester,
+                        COUNT(DISTINCT cs.student_id) AS total_students,
+                        COUNT(s.score_id) AS scored_students,
                         AVG(s.score) AS avg_score,
-                        SUM(CASE WHEN s.score >= 60 THEN 1 ELSE 0 END) AS pass_count
+                        MIN(s.score) AS min_score,
+                        MAX(s.score) AS max_score,
+                        SUM(CASE WHEN s.score >= 90 THEN 1 ELSE 0 END) AS excellent_count,
+                        SUM(CASE WHEN s.score >= 60 AND s.score < 90 THEN 1 ELSE 0 END) AS pass_count,
+                        SUM(CASE WHEN s.score < 60 THEN 1 ELSE 0 END) AS fail_count
                     FROM courses c
-                    LEFT JOIN scores s ON c.course_id = s.course_id
+                    LEFT JOIN course_selection cs ON c.course_id = cs.course_id
+                    LEFT JOIN scores s ON cs.selection_id = s.selection_id AND s.score IS NOT NULL
                     WHERE c.teacher_id = %s
-                    GROUP BY c.course_id, c.course_name, c.credit, c.semester
+                    GROUP BY c.course_id, c.course_name, c.credit, cs.semester
                     ORDER BY c.course_id DESC
                     """,
                     (teacher_id,),
@@ -255,30 +322,79 @@ def _build_user_context(user):
                 courses = cur.fetchall()
                 
                 if courses:
-                    course_info_list = []
+                    summary.append(f"\n【教授的课程】共{len(courses)}门")
+                    
+                    # 总体统计
+                    total_students_all = sum(c.get("total_students", 0) or 0 for c in courses)
+                    total_scored = sum(c.get("scored_students", 0) or 0 for c in courses)
+                    summary.append(f"总选课人数：{total_students_all}人，已有成绩：{total_scored}人")
+                    
+                    # 每门课程的详细信息
                     for course in courses:
                         course_name = course.get("course_name", "")
                         credit = course.get("credit", 0)
                         semester = course.get("semester", "")
                         total = course.get("total_students", 0) or 0
+                        scored = course.get("scored_students", 0) or 0
                         avg_score = course.get("avg_score")
+                        min_score = course.get("min_score")
+                        max_score = course.get("max_score")
+                        excellent = course.get("excellent_count", 0) or 0
                         pass_count = course.get("pass_count", 0) or 0
-                        pass_rate = (pass_count / total * 100) if total > 0 else 0
+                        fail = course.get("fail_count", 0) or 0
                         
-                        course_desc = f"{course_name}（学分：{credit}"
+                        course_info = f"\n• {course_name}（{credit}学分"
                         if semester:
-                            course_desc += f"，学期：{semester}"
-                        course_desc += f"，选课人数：{total}人"
-                        if avg_score is not None:
-                            course_desc += f"，平均分：{avg_score:.1f}分"
-                        if total > 0:
-                            course_desc += f"，及格率：{pass_rate:.1f}%"
-                        course_desc += "）"
-                        course_info_list.append(course_desc)
-                    
-                    summary.append(f"教授的课程：{'；'.join(course_info_list)}")
+                            course_info += f"，{semester}"
+                        course_info += f"）"
+                        course_info += f"\n  选课人数：{total}人"
+                        if scored > 0:
+                            course_info += f"，已有成绩：{scored}人"
+                            if avg_score is not None:
+                                course_info += f"\n  平均分：{avg_score:.1f}分"
+                                if min_score is not None and max_score is not None:
+                                    course_info += f"，最高分：{max_score}分，最低分：{min_score}分"
+                            if scored > 0:
+                                pass_rate = ((excellent + pass_count) / scored * 100) if scored > 0 else 0
+                                course_info += f"\n  成绩分布：优秀({excellent}人)，及格({pass_count}人)，不及格({fail}人)，及格率：{pass_rate:.1f}%"
+                        else:
+                            course_info += "（暂无成绩）"
+                        
+                        summary.append(course_info)
                 
-                return "；".join(summary)
+                # 获取需要关注的课程（及格率低于70%或平均分低于70分）
+                cur.execute(
+                    """
+                    SELECT
+                        c.course_name,
+                        COUNT(s.score_id) AS scored_count,
+                        AVG(s.score) AS avg_score,
+                        SUM(CASE WHEN s.score >= 60 THEN 1 ELSE 0 END) AS pass_count
+                    FROM courses c
+                    LEFT JOIN course_selection cs ON c.course_id = cs.course_id
+                    LEFT JOIN scores s ON cs.selection_id = s.selection_id AND s.score IS NOT NULL
+                    WHERE c.teacher_id = %s
+                    GROUP BY c.course_id, c.course_name
+                    HAVING scored_count > 0 AND (
+                        (pass_count / scored_count < 0.7) OR 
+                        (AVG(s.score) < 70)
+                    )
+                    ORDER BY avg_score ASC
+                    """,
+                    (teacher_id,),
+                )
+                concern_courses = cur.fetchall()
+                if concern_courses:
+                    summary.append(f"\n【需要关注的课程】（及格率低于70%或平均分低于70分）")
+                    for course in concern_courses:
+                        course_name = course.get("course_name", "")
+                        avg_score = course.get("avg_score")
+                        scored = course.get("scored_count", 0) or 0
+                        pass_count = course.get("pass_count", 0) or 0
+                        pass_rate = (pass_count / scored * 100) if scored > 0 else 0
+                        summary.append(f"• {course_name}：平均分{avg_score:.1f}分，及格率{pass_rate:.1f}%")
+                
+                return "\n".join(summary)
 
             if role == "admin":
                 # 管理员：提供整个数据库的统计信息
@@ -481,8 +597,9 @@ def _build_user_context(user):
                 cur.execute("""
                     SELECT s.name AS student_name, c.course_name, sc.score, sc.exam_date
                     FROM scores sc
-                    JOIN students s ON sc.student_id = s.student_id
-                    JOIN courses c ON sc.course_id = c.course_id
+                    JOIN course_selection cs ON sc.selection_id = cs.selection_id
+                    JOIN students s ON cs.student_id = s.student_id
+                    JOIN courses c ON cs.course_id = c.course_id
                     WHERE sc.score IS NOT NULL
                     ORDER BY sc.exam_date DESC, sc.score DESC
                     LIMIT 20
@@ -568,6 +685,139 @@ def login():
         "real_name": row.get("name") or row["username"],
         "token": f"TOKEN-{row['user_id']}"
     })
+
+# ---------- 用户管理 ----------
+
+@app.route("/api/users", methods=["GET"])
+def list_users():
+    """查询用户列表"""
+    page = int(request.args.get("page", 1))
+    page_size = int(request.args.get("page_size", 20))
+    keyword = request.args.get("keyword", "").strip()
+    user_id = request.args.get("user_id", "").strip()
+    username = request.args.get("username", "").strip()
+    role = request.args.get("role", "").strip()
+
+    where = []
+    params = []
+    
+    # 如果提供了user_id，精确匹配
+    if user_id:
+        try:
+            where.append("user_id = %s")
+            params.append(int(user_id))
+        except ValueError:
+            pass
+    
+    # 如果提供了username，模糊匹配
+    if username:
+        where.append("username LIKE %s")
+        params.append(f"%{username}%")
+    
+    # 如果提供了role，精确匹配
+    if role:
+        where.append("role = %s")
+        params.append(role)
+    
+    # 如果只提供了keyword（通用搜索），搜索用户名、用户ID
+    if keyword and not (user_id or username or role):
+        try:
+            # 尝试将keyword解析为数字（用户ID）
+            user_id_int = int(keyword)
+            where.append("(user_id = %s OR username LIKE %s)")
+            kw = f"%{keyword}%"
+            params.extend([user_id_int, kw])
+        except ValueError:
+            # 不是数字，只搜索用户名
+            where.append("username LIKE %s")
+            kw = f"%{keyword}%"
+            params.append(kw)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    offset = (page - 1) * page_size
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) as total FROM users {where_sql}", params)
+        total = cur.fetchone()['total']
+
+        cur.execute(
+            f"""
+            SELECT user_id, username, role, created_at, last_login
+            FROM users
+            {where_sql}
+            ORDER BY user_id DESC
+            LIMIT %s OFFSET %s
+            """,
+            params + [page_size, offset],
+        )
+        rows = cur.fetchall()
+
+    users = [dict(r) for r in rows]
+    return jsonify({
+        "status": "ok",
+        "data": users,
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    })
+
+@app.route("/api/users/<int:user_id>/password", methods=["PUT"])
+def change_user_password(user_id):
+    """修改用户密码"""
+    data = request.json or {}
+    old_password = data.get("old_password", "").strip()
+    new_password = data.get("new_password", "").strip()
+
+    if not old_password or not new_password:
+        return jsonify({"status": "error", "msg": "原密码和新密码不能为空"}), 400
+
+    if len(new_password) < 6:
+        return jsonify({"status": "error", "msg": "新密码长度至少为6位"}), 400
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        # 查询用户
+        cur.execute("SELECT password FROM users WHERE user_id=%s", (user_id,))
+        row = cur.fetchone()
+        
+        if row is None:
+            return jsonify({"status": "error", "msg": "用户不存在"}), 404
+        
+        stored_password = row["password"]
+        is_werkzeug_hash = stored_password.startswith('pbkdf2:sha256:')
+        
+        # 验证原密码
+        password_valid = False
+        
+        if is_werkzeug_hash:
+            # Werkzeug 格式的密码哈希
+            password_valid = check_password_hash(stored_password, old_password)
+        else:
+            # 可能是 MD5 或其他格式的哈希
+            if len(stored_password) == 32:  # MD5 哈希通常是 32 个字符
+                md5_hash = hashlib.md5(old_password.encode('utf-8')).hexdigest()
+                password_valid = (md5_hash.lower() == stored_password.lower())
+            elif len(stored_password) == 40:  # SHA1 哈希通常是 40 个字符
+                sha1_hash = hashlib.sha1(old_password.encode('utf-8')).hexdigest()
+                password_valid = (sha1_hash.lower() == stored_password.lower())
+            elif len(stored_password) == 64:  # SHA256 哈希通常是 64 个字符
+                sha256_hash = hashlib.sha256(old_password.encode('utf-8')).hexdigest()
+                password_valid = (sha256_hash.lower() == stored_password.lower())
+            else:
+                # 尝试直接比较（如果是明文，虽然不推荐）
+                password_valid = (stored_password == old_password)
+        
+        if not password_valid:
+            return jsonify({"status": "error", "msg": "原密码错误"}), 400
+        
+        # 使用SHA-256哈希新密码
+        new_password_hash = hashlib.sha256(new_password.encode('utf-8')).hexdigest()
+        
+        # 更新密码
+        cur.execute("UPDATE users SET password=%s WHERE user_id=%s", (new_password_hash, user_id))
+        
+    return jsonify({"status": "ok", "msg": "密码修改成功"})
 
 # ---------- 学生 CRUD + 搜索 + 分页 ----------
 
@@ -1211,31 +1461,37 @@ def delete_teacher(tid):
 
 @app.route("/api/teacher/profile", methods=["GET"])
 def get_teacher_profile():
-    token = request.headers.get("X-Token", "")
-    user = _get_user_from_token(token)
-    if not user:
-        return jsonify({"status": "error", "msg": "请先登录"}), 401
-    if user["role"] != "teacher":
-        return jsonify({"status": "error", "msg": "仅教师可以访问"}), 403
+    try:
+        token = request.headers.get("X-Token", "")
+        user = _get_user_from_token(token)
+        if not user:
+            return jsonify({"status": "error", "msg": "请先登录"}), 401
+        if user["role"] != "teacher":
+            return jsonify({"status": "error", "msg": "仅教师可以访问"}), 403
 
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT t.teacher_id, t.user_id, t.name, t.department, t.title,
-                   t.phone, t.email, t.research, u.username
-            FROM teachers t
-            JOIN users u ON t.user_id = u.user_id
-            WHERE t.user_id=%s
-            """,
-            (user["user_id"],),
-        )
-        row = cur.fetchone()
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT t.teacher_id, t.user_id, t.name, t.department, t.title,
+                       t.phone, t.email, t.research, u.username
+                FROM teachers t
+                JOIN users u ON t.user_id = u.user_id
+                WHERE t.user_id=%s
+                """,
+                (user["user_id"],),
+            )
+            row = cur.fetchone()
 
-    if not row:
-        return jsonify({"status": "error", "msg": "未找到教师档案"}), 404
+        if not row:
+            return jsonify({"status": "error", "msg": "未找到教师档案"}), 404
 
-    return jsonify({"status": "ok", "data": row})
+        return jsonify({"status": "ok", "data": row})
+    except Exception as e:
+        import traceback
+        print(f"get_teacher_profile 错误: {e}")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "msg": f"获取教师信息失败：{str(e)}"}), 500
 
 
 @app.route("/api/teacher/profile", methods=["PUT"])
@@ -1304,60 +1560,67 @@ def update_teacher_profile():
 @app.route("/api/teacher/my-courses", methods=["GET"])
 def get_teacher_my_courses():
     """获取当前教师教授的课程列表（含选课人数统计）"""
-    token = request.headers.get("X-Token", "")
-    user = _get_user_from_token(token)
-    if not user:
-        return jsonify({"status": "error", "msg": "请先登录"}), 401
-    if user["role"] != "teacher":
-        return jsonify({"status": "error", "msg": "仅教师可以访问"}), 403
+    try:
+        token = request.headers.get("X-Token", "")
+        user = _get_user_from_token(token)
+        if not user:
+            return jsonify({"status": "error", "msg": "请先登录"}), 401
+        if user["role"] != "teacher":
+            return jsonify({"status": "error", "msg": "仅教师可以访问"}), 403
 
-    # 先获取当前教师的teacher_id
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT teacher_id FROM teachers WHERE user_id=%s
-            """,
-            (user["user_id"],),
-        )
-        teacher_row = cur.fetchone()
-        if not teacher_row:
-            return jsonify({"status": "error", "msg": "未找到教师档案"}), 404
+        # 先获取当前教师的teacher_id
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT teacher_id FROM teachers WHERE user_id=%s
+                """,
+                (user["user_id"],),
+            )
+            teacher_row = cur.fetchone()
+            if not teacher_row:
+                return jsonify({"status": "error", "msg": "未找到教师档案"}), 404
 
-        teacher_id = teacher_row["teacher_id"]
+            teacher_id = teacher_row["teacher_id"]
 
-        # 查询该教师教授的课程，并统计选课人数
-        cur.execute(
-            """
-            SELECT
-                c.course_id,
-                c.course_name,
-                c.credit,
-                c.semester,
-                COUNT(s.score_id) AS selected_count
-            FROM courses c
-            LEFT JOIN scores s ON c.course_id = s.course_id
-            WHERE c.teacher_id = %s
-            GROUP BY c.course_id, c.course_name, c.credit, c.semester
-            ORDER BY c.course_id DESC
-            """,
-            (teacher_id,),
-        )
-        rows = cur.fetchall()
+            # 查询该教师教授的课程，并统计选课人数
+            cur.execute(
+                """
+                SELECT
+                    c.course_id,
+                    c.course_name,
+                    c.credit,
+                    COALESCE(c.semester, '') AS semester,
+                    COUNT(DISTINCT cs.selection_id) AS selected_count
+                FROM courses c
+                LEFT JOIN course_selection cs ON c.course_id = cs.course_id
+                WHERE c.teacher_id = %s
+                GROUP BY c.course_id, c.course_name, c.credit, c.semester
+                ORDER BY c.course_id DESC
+                """,
+                (teacher_id,),
+            )
+            rows = cur.fetchall()
 
-    return jsonify({"status": "ok", "data": [dict(r) for r in rows]})
+        return jsonify({"status": "ok", "data": [dict(r) for r in rows]})
+    except Exception as e:
+        import traceback
+        print(f"get_teacher_my_courses 错误: {e}")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "msg": f"获取课程列表失败：{str(e)}"}), 500
 
 
 @app.route("/api/courses", methods=["GET"])
 def list_courses():
     """获取课程列表，支持搜索和分页"""
-    # 参数：page, page_size, keyword, course_id, course_name, teacher_name
+    # 参数：page, page_size, keyword, course_id, course_name, teacher_name, semester
     page = int(request.args.get("page", 1))
     page_size = int(request.args.get("page_size", 20))
     keyword = request.args.get("keyword", "").strip()
     course_id = request.args.get("course_id", "").strip()
     course_name = request.args.get("course_name", "").strip()
     teacher_name = request.args.get("teacher_name", "").strip()
+    semester = request.args.get("semester", "").strip()
 
     where = []
     params = []
@@ -1379,6 +1642,11 @@ def list_courses():
     if teacher_name:
         where.append("t.name LIKE %s")
         params.append(f"%{teacher_name}%")
+    
+    # 如果提供了semester，精确匹配
+    if semester:
+        where.append("c.semester = %s")
+        params.append(semester)
     
     # 如果只提供了keyword（通用搜索），搜索课程号、课程名、任课教师
     if keyword and not (course_id or course_name or teacher_name):
@@ -1637,12 +1905,755 @@ def delete_course(cid):
     except Exception as e:
         return jsonify({"status": "error", "msg": f"删除失败：{str(e)}"}), 500
 
+# ---------- 教室管理 CRUD ----------
+
+@app.route("/api/classrooms", methods=["GET"])
+def list_classrooms():
+    """获取教室列表，支持搜索和分页"""
+    page = int(request.args.get("page", 1))
+    page_size = int(request.args.get("page_size", 20))
+    keyword = request.args.get("keyword", "").strip()
+    classroom_id = request.args.get("classroom_id", "").strip()
+    building = request.args.get("building", "").strip()
+    room = request.args.get("room", "").strip()
+
+    where = []
+    params = []
+    
+    # 如果提供了classroom_id，精确匹配
+    if classroom_id:
+        try:
+            where.append("classroom_id = %s")
+            params.append(int(classroom_id))
+        except ValueError:
+            pass
+    
+    # 如果提供了building，模糊匹配
+    if building:
+        where.append("building LIKE %s")
+        params.append(f"%{building}%")
+    
+    # 如果提供了room，模糊匹配
+    if room:
+        where.append("room LIKE %s")
+        params.append(f"%{room}%")
+    
+    # 如果只提供了keyword（通用搜索），搜索教室ID、楼栋、房间号
+    if keyword and not (classroom_id or building or room):
+        try:
+            # 尝试将keyword解析为数字（教室ID）
+            classroom_id_int = int(keyword)
+            where.append("(classroom_id = %s OR building LIKE %s OR room LIKE %s)")
+            kw = f"%{keyword}%"
+            params.extend([classroom_id_int, kw, kw])
+        except ValueError:
+            # 不是数字，只搜索楼栋和房间号
+            where.append("(building LIKE %s OR room LIKE %s)")
+            kw = f"%{keyword}%"
+            params.extend([kw, kw])
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    offset = (page - 1) * page_size
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) as total FROM classrooms {where_sql}", params)
+        total = cur.fetchone()['total']
+
+        cur.execute(
+            f"""
+            SELECT * FROM classrooms
+            {where_sql}
+            ORDER BY classroom_id DESC
+            LIMIT %s OFFSET %s
+            """,
+            params + [page_size, offset],
+        )
+        rows = cur.fetchall()
+
+    classrooms = [dict(r) for r in rows]
+    return jsonify({
+        "status": "ok",
+        "data": classrooms,
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    })
+
+@app.route("/api/classrooms", methods=["POST"])
+def create_classroom():
+    """新增教室"""
+    # 检查权限：只有管理员可以创建
+    token = request.headers.get("X-Token", "")
+    user = _get_user_from_token(token)
+    if not user:
+        return jsonify({"status": "error", "msg": "请先登录"}), 401
+    if user.get("role") != "admin":
+        return jsonify({"status": "error", "msg": "只有管理员可以创建教室"}), 403
+    
+    data = request.json or {}
+    building = data.get("building", "").strip()
+    room = data.get("room", "").strip()
+    capacity = data.get("capacity")
+
+    if not building:
+        return jsonify({"status": "error", "msg": "楼栋不能为空"}), 400
+    if not room:
+        return jsonify({"status": "error", "msg": "房间号不能为空"}), 400
+    
+    # 验证容量
+    if capacity is not None:
+        try:
+            capacity = int(capacity)
+            if capacity <= 0:
+                return jsonify({"status": "error", "msg": "容量必须大于0"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"status": "error", "msg": "容量格式错误"}), 400
+    else:
+        capacity = 60  # 默认容量
+
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 检查是否已存在相同的楼栋和房间号
+            cur.execute("SELECT classroom_id FROM classrooms WHERE building=%s AND room=%s", (building, room))
+            if cur.fetchone():
+                return jsonify({"status": "error", "msg": "该教室已存在"}), 400
+            
+            # 创建教室记录
+            cur.execute("""
+            INSERT INTO classrooms (building, room, capacity)
+            VALUES (%s, %s, %s)
+            """, (building, room, capacity))
+            classroom_id = cur.lastrowid
+            
+            # 记录操作日志
+            if user.get("user_id"):
+                cur.execute("""
+                INSERT INTO audit_log (user_id, action, target_table, target_id, details)
+                VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    user["user_id"],
+                    "CREATE",
+                    "classrooms",
+                    classroom_id,
+                    f"新增教室: {building}{room} (容量: {capacity})"
+                ))
+            
+            conn.commit()
+        
+        return jsonify({
+            "status": "ok",
+            "id": classroom_id
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"创建失败：{str(e)}"}), 500
+
+@app.route("/api/classrooms/<int:cid>", methods=["PUT"])
+def update_classroom(cid):
+    """修改教室信息"""
+    # 检查权限：只有管理员可以修改
+    token = request.headers.get("X-Token", "")
+    user = _get_user_from_token(token)
+    if not user:
+        return jsonify({"status": "error", "msg": "请先登录"}), 401
+    if user.get("role") != "admin":
+        return jsonify({"status": "error", "msg": "只有管理员可以修改教室"}), 403
+    
+    data = request.json or {}
+    
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 先获取原记录
+            cur.execute("SELECT * FROM classrooms WHERE classroom_id=%s", (cid,))
+            old_row = cur.fetchone()
+            if not old_row:
+                return jsonify({"status": "error", "msg": "教室不存在"}), 404
+            
+            old_data = dict(old_row)
+            
+            # 构建更新字段
+            update_fields = []
+            update_values = []
+            changes = []
+            user_id = user.get("user_id")
+            
+            # 可更新字段
+            updatable_fields = ["building", "room", "capacity"]
+            
+            for field in updatable_fields:
+                if field in data:
+                    new_val = data[field]
+                    old_val = old_data.get(field)
+                    
+                    # 处理不同类型的值
+                    if field == "capacity":
+                        if new_val is not None:
+                            try:
+                                new_val = int(new_val)
+                                if new_val <= 0:
+                                    return jsonify({"status": "error", "msg": "容量必须大于0"}), 400
+                            except (ValueError, TypeError):
+                                return jsonify({"status": "error", "msg": "容量格式错误"}), 400
+                        else:
+                            new_val = 60  # 默认容量
+                    elif isinstance(new_val, str):
+                        new_val = new_val.strip() if new_val.strip() else None
+                        if field in ["building", "room"] and not new_val:
+                            return jsonify({"status": "error", "msg": f"{field}不能为空"}), 400
+                    
+                    # 如果是building或room，检查是否与其他教室重复
+                    if field in ["building", "room"]:
+                        other_building = new_val if field == "building" else old_data.get("building")
+                        other_room = new_val if field == "room" else old_data.get("room")
+                        cur.execute("SELECT classroom_id FROM classrooms WHERE building=%s AND room=%s AND classroom_id!=%s", 
+                                   (other_building, other_room, cid))
+                        if cur.fetchone():
+                            return jsonify({"status": "error", "msg": "该教室已存在"}), 400
+                    
+                    if old_val != new_val:
+                        update_fields.append(f"{field}=%s")
+                        update_values.append(new_val)
+                        changes.append(f"{field}: '{old_val or ''}' -> '{new_val or ''}'")
+            
+            # 如果有更新，执行SQL
+            if update_fields:
+                update_values.append(cid)
+                sql = f"UPDATE classrooms SET {', '.join(update_fields)} WHERE classroom_id=%s"
+                cur.execute(sql, update_values)
+                
+                # 记录 audit_log
+                if user_id:
+                    details = "; ".join(changes) if changes else "无变更"
+                    cur.execute("""
+                    INSERT INTO audit_log (user_id, action, target_table, target_id, details)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        user_id,
+                        "UPDATE",
+                        "classrooms",
+                        cid,
+                        f"更新教室信息: {details}"
+                    ))
+                conn.commit()
+            else:
+                # 没有实际更新
+                conn.commit()
+
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"更新失败：{str(e)}"}), 500
+
+@app.route("/api/classrooms/<int:cid>", methods=["DELETE"])
+def delete_classroom(cid):
+    """删除教室"""
+    # 检查权限：只有管理员可以删除
+    token = request.headers.get("X-Token", "")
+    user = _get_user_from_token(token)
+    if not user:
+        return jsonify({"status": "error", "msg": "请先登录"}), 401
+    if user.get("role") != "admin":
+        return jsonify({"status": "error", "msg": "只有管理员可以删除教室"}), 403
+    
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 先获取教室信息用于日志
+            cur.execute("SELECT building, room FROM classrooms WHERE classroom_id=%s", (cid,))
+            classroom = cur.fetchone()
+            if not classroom:
+                return jsonify({"status": "error", "msg": "教室不存在"}), 404
+            
+            building = classroom.get("building", "")
+            room = classroom.get("room", "")
+            classroom_name = f"{building}{room}"
+            
+            # 检查是否被课程表使用
+            cur.execute("SELECT COUNT(*) as cnt FROM course_schedule WHERE classroom_id=%s", (cid,))
+            usage_count = cur.fetchone()['cnt']
+            if usage_count > 0:
+                return jsonify({"status": "error", "msg": f"该教室正在被{usage_count}个课程使用，无法删除"}), 400
+            
+            # 删除教室记录
+            cur.execute("DELETE FROM classrooms WHERE classroom_id=%s", (cid,))
+            
+            # 记录操作日志
+            if user.get("user_id"):
+                cur.execute("""
+                INSERT INTO audit_log (user_id, action, target_table, target_id, details)
+                VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    user["user_id"],
+                    "DELETE",
+                    "classrooms",
+                    cid,
+                    f"删除教室: {classroom_name}"
+                ))
+            
+            conn.commit()
+        
+        return jsonify({"status": "ok", "msg": "删除成功"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"删除失败：{str(e)}"}), 500
+
+# ---------- 课程安排管理 CRUD ----------
+
+@app.route("/api/course-schedules", methods=["GET"])
+def list_course_schedules():
+    """获取课程安排列表，支持搜索和分页"""
+    page = int(request.args.get("page", 1))
+    page_size = int(request.args.get("page_size", 20))
+    keyword = request.args.get("keyword", "").strip()
+    schedule_id = request.args.get("schedule_id", "").strip()
+    course_id = request.args.get("course_id", "").strip()
+    teacher_id = request.args.get("teacher_id", "").strip()
+    semester = request.args.get("semester", "").strip()
+    day_of_week = request.args.get("day_of_week", "").strip()
+
+    where = []
+    params = []
+    
+    # 如果提供了schedule_id，精确匹配
+    if schedule_id:
+        try:
+            where.append("cs.schedule_id = %s")
+            params.append(int(schedule_id))
+        except ValueError:
+            pass
+    
+    # 如果提供了course_id，精确匹配
+    if course_id:
+        try:
+            where.append("cs.course_id = %s")
+            params.append(int(course_id))
+        except ValueError:
+            pass
+    
+    # 如果提供了teacher_id，精确匹配
+    if teacher_id:
+        try:
+            where.append("cs.teacher_id = %s")
+            params.append(int(teacher_id))
+        except ValueError:
+            pass
+    
+    # 如果提供了semester，精确匹配
+    if semester:
+        where.append("cs.semester = %s")
+        params.append(semester)
+    
+    # 如果提供了day_of_week，精确匹配
+    if day_of_week:
+        where.append("cs.day_of_week = %s")
+        params.append(day_of_week)
+    
+    # 如果只提供了keyword（通用搜索），搜索课程名、教师名
+    if keyword and not (schedule_id or course_id or teacher_id or semester or day_of_week):
+        where.append("(c.course_name LIKE %s OR t.name LIKE %s)")
+        kw = f"%{keyword}%"
+        params.extend([kw, kw])
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    offset = (page - 1) * page_size
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT COUNT(*) as total 
+            FROM course_schedule cs
+            LEFT JOIN courses c ON cs.course_id = c.course_id
+            LEFT JOIN teachers t ON cs.teacher_id = t.teacher_id
+            {where_sql}
+        """, params)
+        total = cur.fetchone()['total']
+
+        cur.execute(
+            f"""
+            SELECT cs.*, 
+                   c.course_name,
+                   t.name AS teacher_name,
+                   cl.building, cl.room,
+                   CONCAT(cl.building, cl.room) AS classroom_name
+            FROM course_schedule cs
+            LEFT JOIN courses c ON cs.course_id = c.course_id
+            LEFT JOIN teachers t ON cs.teacher_id = t.teacher_id
+            LEFT JOIN classrooms cl ON cs.classroom_id = cl.classroom_id
+            {where_sql}
+            ORDER BY cs.schedule_id DESC
+            LIMIT %s OFFSET %s
+            """,
+            params + [page_size, offset],
+        )
+        rows = cur.fetchall()
+
+    schedules = [dict(r) for r in rows]
+    return jsonify({
+        "status": "ok",
+        "data": schedules,
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    })
+
+@app.route("/api/course-schedules", methods=["POST"])
+def create_course_schedule():
+    """新增课程安排"""
+    # 检查权限：只有管理员可以创建
+    token = request.headers.get("X-Token", "")
+    user = _get_user_from_token(token)
+    if not user:
+        return jsonify({"status": "error", "msg": "请先登录"}), 401
+    if user.get("role") != "admin":
+        return jsonify({"status": "error", "msg": "只有管理员可以创建课程安排"}), 403
+    
+    data = request.json or {}
+    course_id = data.get("course_id")
+    teacher_id = data.get("teacher_id")
+    semester = data.get("semester", "").strip()
+    day_of_week = data.get("day_of_week", "").strip()
+    period_start = data.get("period_start")
+    period_end = data.get("period_end")
+    classroom_id = data.get("classroom_id")
+    weeks = data.get("weeks", "").strip()
+
+    # 验证必填字段
+    if not course_id:
+        return jsonify({"status": "error", "msg": "课程ID不能为空"}), 400
+    if not teacher_id:
+        return jsonify({"status": "error", "msg": "教师ID不能为空"}), 400
+    if not semester:
+        return jsonify({"status": "error", "msg": "学期不能为空"}), 400
+    if not day_of_week:
+        return jsonify({"status": "error", "msg": "星期不能为空"}), 400
+    if period_start is None:
+        return jsonify({"status": "error", "msg": "开始节次不能为空"}), 400
+    if period_end is None:
+        return jsonify({"status": "error", "msg": "结束节次不能为空"}), 400
+    if not weeks:
+        return jsonify({"status": "error", "msg": "周次不能为空"}), 400
+    
+    # 验证day_of_week
+    valid_days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    if day_of_week not in valid_days:
+        return jsonify({"status": "error", "msg": f"星期格式错误，必须是: {', '.join(valid_days)}"}), 400
+    
+    # 验证节次
+    try:
+        course_id = int(course_id)
+        teacher_id = int(teacher_id)
+        period_start = int(period_start)
+        period_end = int(period_end)
+        if period_start < 1 or period_start > 12:
+            return jsonify({"status": "error", "msg": "开始节次必须在1-12之间"}), 400
+        if period_end < 1 or period_end > 12:
+            return jsonify({"status": "error", "msg": "结束节次必须在1-12之间"}), 400
+        if period_end < period_start:
+            return jsonify({"status": "error", "msg": "结束节次不能小于开始节次"}), 400
+        if classroom_id is not None:
+            classroom_id = int(classroom_id) if classroom_id else None
+    except (ValueError, TypeError):
+        return jsonify({"status": "error", "msg": "ID或节次格式错误"}), 400
+
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 验证课程是否存在
+            cur.execute("SELECT course_id FROM courses WHERE course_id=%s", (course_id,))
+            if not cur.fetchone():
+                return jsonify({"status": "error", "msg": "课程不存在"}), 400
+            
+            # 验证教师是否存在
+            cur.execute("SELECT teacher_id FROM teachers WHERE teacher_id=%s", (teacher_id,))
+            if not cur.fetchone():
+                return jsonify({"status": "error", "msg": "教师不存在"}), 400
+            
+            # 验证教室是否存在（如果提供了）
+            if classroom_id:
+                cur.execute("SELECT classroom_id FROM classrooms WHERE classroom_id=%s", (classroom_id,))
+                if not cur.fetchone():
+                    return jsonify({"status": "error", "msg": "教室不存在"}), 400
+            
+            # 检查时间冲突：同一教师在同一时间不能有多个课程
+            cur.execute("""
+                SELECT schedule_id FROM course_schedule
+                WHERE teacher_id=%s AND semester=%s AND day_of_week=%s
+                AND ((period_start <= %s AND period_end >= %s) OR (period_start <= %s AND period_end >= %s))
+            """, (teacher_id, semester, day_of_week, period_start, period_start, period_end, period_end))
+            if cur.fetchone():
+                return jsonify({"status": "error", "msg": "该教师在此时间段已有其他课程安排"}), 400
+            
+            # 检查教室冲突：同一教室在同一时间不能有多个课程
+            if classroom_id:
+                cur.execute("""
+                    SELECT schedule_id FROM course_schedule
+                    WHERE classroom_id=%s AND semester=%s AND day_of_week=%s
+                    AND ((period_start <= %s AND period_end >= %s) OR (period_start <= %s AND period_end >= %s))
+                """, (classroom_id, semester, day_of_week, period_start, period_start, period_end, period_end))
+                if cur.fetchone():
+                    return jsonify({"status": "error", "msg": "该教室在此时间段已被占用"}), 400
+            
+            # 创建课程安排记录
+            cur.execute("""
+            INSERT INTO course_schedule (course_id, teacher_id, semester, day_of_week, period_start, period_end, classroom_id, weeks)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (course_id, teacher_id, semester, day_of_week, period_start, period_end, classroom_id, weeks))
+            schedule_id = cur.lastrowid
+            
+            # 记录操作日志
+            if user.get("user_id"):
+                cur.execute("""
+                INSERT INTO audit_log (user_id, action, target_table, target_id, details)
+                VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    user["user_id"],
+                    "CREATE",
+                    "course_schedule",
+                    schedule_id,
+                    f"新增课程安排: 课程ID {course_id}, 教师ID {teacher_id}, {semester}, {day_of_week} {period_start}-{period_end}节"
+                ))
+            
+            conn.commit()
+        
+        return jsonify({
+            "status": "ok",
+            "id": schedule_id
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"创建失败：{str(e)}"}), 500
+
+@app.route("/api/course-schedules/<int:sid>", methods=["PUT"])
+def update_course_schedule(sid):
+    """修改课程安排信息"""
+    # 检查权限：只有管理员可以修改
+    token = request.headers.get("X-Token", "")
+    user = _get_user_from_token(token)
+    if not user:
+        return jsonify({"status": "error", "msg": "请先登录"}), 401
+    if user.get("role") != "admin":
+        return jsonify({"status": "error", "msg": "只有管理员可以修改课程安排"}), 403
+    
+    data = request.json or {}
+    
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 先获取原记录
+            cur.execute("SELECT * FROM course_schedule WHERE schedule_id=%s", (sid,))
+            old_row = cur.fetchone()
+            if not old_row:
+                return jsonify({"status": "error", "msg": "课程安排不存在"}), 404
+            
+            old_data = dict(old_row)
+            
+            # 构建更新字段
+            update_fields = []
+            update_values = []
+            changes = []
+            user_id = user.get("user_id")
+            
+            # 可更新字段
+            updatable_fields = ["course_id", "teacher_id", "semester", "day_of_week", "period_start", "period_end", "classroom_id", "weeks"]
+            
+            for field in updatable_fields:
+                if field in data:
+                    new_val = data[field]
+                    old_val = old_data.get(field)
+                    
+                    # 处理不同类型的值
+                    if field in ["course_id", "teacher_id", "period_start", "period_end"]:
+                        if new_val is not None:
+                            try:
+                                new_val = int(new_val)
+                            except (ValueError, TypeError):
+                                return jsonify({"status": "error", "msg": f"{field}格式错误"}), 400
+                        else:
+                            continue  # 跳过None值
+                    elif field == "classroom_id":
+                        if new_val is not None and new_val != "":
+                            try:
+                                new_val = int(new_val)
+                            except (ValueError, TypeError):
+                                return jsonify({"status": "error", "msg": "教室ID格式错误"}), 400
+                        else:
+                            new_val = None
+                    elif isinstance(new_val, str):
+                        new_val = new_val.strip() if new_val.strip() else None
+                        if field in ["semester", "day_of_week", "weeks"] and not new_val:
+                            return jsonify({"status": "error", "msg": f"{field}不能为空"}), 400
+                    
+                    # 验证day_of_week
+                    if field == "day_of_week" and new_val:
+                        valid_days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                        if new_val not in valid_days:
+                            return jsonify({"status": "error", "msg": f"星期格式错误，必须是: {', '.join(valid_days)}"}), 400
+                    
+                    # 验证节次
+                    if field == "period_start" and new_val:
+                        if new_val < 1 or new_val > 12:
+                            return jsonify({"status": "error", "msg": "开始节次必须在1-12之间"}), 400
+                    if field == "period_end" and new_val:
+                        if new_val < 1 or new_val > 12:
+                            return jsonify({"status": "error", "msg": "结束节次必须在1-12之间"}), 400
+                    
+                    if old_val != new_val:
+                        update_fields.append(f"{field}=%s")
+                        update_values.append(new_val)
+                        changes.append(f"{field}: '{old_val or ''}' -> '{new_val or ''}'")
+            
+            # 如果有更新，需要验证外键和时间冲突
+            if update_fields:
+                # 获取更新后的值用于验证
+                updated_data = old_data.copy()
+                field_to_value = {}
+                for i, field_expr in enumerate(update_fields):
+                    field_name = field_expr.split('=')[0]
+                    field_to_value[field_name] = update_values[i]
+                    updated_data[field_name] = update_values[i]
+                
+                # 验证结束节次不小于开始节次
+                period_start = updated_data.get("period_start")
+                period_end = updated_data.get("period_end")
+                if period_start and period_end and period_end < period_start:
+                    return jsonify({"status": "error", "msg": "结束节次不能小于开始节次"}), 400
+                
+                # 验证外键
+                if "course_id" in field_to_value:
+                    course_id = updated_data.get("course_id")
+                    cur.execute("SELECT course_id FROM courses WHERE course_id=%s", (course_id,))
+                    if not cur.fetchone():
+                        return jsonify({"status": "error", "msg": "课程不存在"}), 400
+                
+                if "teacher_id" in field_to_value:
+                    teacher_id = updated_data.get("teacher_id")
+                    cur.execute("SELECT teacher_id FROM teachers WHERE teacher_id=%s", (teacher_id,))
+                    if not cur.fetchone():
+                        return jsonify({"status": "error", "msg": "教师不存在"}), 400
+                
+                if "classroom_id" in field_to_value and updated_data.get("classroom_id"):
+                    classroom_id = updated_data.get("classroom_id")
+                    cur.execute("SELECT classroom_id FROM classrooms WHERE classroom_id=%s", (classroom_id,))
+                    if not cur.fetchone():
+                        return jsonify({"status": "error", "msg": "教室不存在"}), 400
+                
+                # 检查时间冲突（排除当前记录）
+                teacher_id = updated_data.get("teacher_id")
+                semester = updated_data.get("semester")
+                day_of_week = updated_data.get("day_of_week")
+                period_start = updated_data.get("period_start")
+                period_end = updated_data.get("period_end")
+                
+                cur.execute("""
+                    SELECT schedule_id FROM course_schedule
+                    WHERE teacher_id=%s AND semester=%s AND day_of_week=%s
+                    AND schedule_id != %s
+                    AND ((period_start <= %s AND period_end >= %s) OR (period_start <= %s AND period_end >= %s))
+                """, (teacher_id, semester, day_of_week, sid, period_start, period_start, period_end, period_end))
+                if cur.fetchone():
+                    return jsonify({"status": "error", "msg": "该教师在此时间段已有其他课程安排"}), 400
+                
+                # 检查教室冲突
+                classroom_id = updated_data.get("classroom_id")
+                if classroom_id:
+                    cur.execute("""
+                        SELECT schedule_id FROM course_schedule
+                        WHERE classroom_id=%s AND semester=%s AND day_of_week=%s
+                        AND schedule_id != %s
+                        AND ((period_start <= %s AND period_end >= %s) OR (period_start <= %s AND period_end >= %s))
+                    """, (classroom_id, semester, day_of_week, sid, period_start, period_start, period_end, period_end))
+                    if cur.fetchone():
+                        return jsonify({"status": "error", "msg": "该教室在此时间段已被占用"}), 400
+                
+                # 执行更新
+                update_values.append(sid)
+                sql = f"UPDATE course_schedule SET {', '.join(update_fields)} WHERE schedule_id=%s"
+                cur.execute(sql, update_values)
+                
+                # 记录 audit_log
+                if user_id:
+                    details = "; ".join(changes) if changes else "无变更"
+                    cur.execute("""
+                    INSERT INTO audit_log (user_id, action, target_table, target_id, details)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        user_id,
+                        "UPDATE",
+                        "course_schedule",
+                        sid,
+                        f"更新课程安排信息: {details}"
+                    ))
+                conn.commit()
+            else:
+                # 没有实际更新
+                conn.commit()
+
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"更新失败：{str(e)}"}), 500
+
+@app.route("/api/course-schedules/<int:sid>", methods=["DELETE"])
+def delete_course_schedule(sid):
+    """删除课程安排"""
+    # 检查权限：只有管理员可以删除
+    token = request.headers.get("X-Token", "")
+    user = _get_user_from_token(token)
+    if not user:
+        return jsonify({"status": "error", "msg": "请先登录"}), 401
+    if user.get("role") != "admin":
+        return jsonify({"status": "error", "msg": "只有管理员可以删除课程安排"}), 403
+    
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 先获取课程安排信息用于日志
+            cur.execute("""
+                SELECT cs.*, c.course_name, t.name AS teacher_name
+                FROM course_schedule cs
+                LEFT JOIN courses c ON cs.course_id = c.course_id
+                LEFT JOIN teachers t ON cs.teacher_id = t.teacher_id
+                WHERE cs.schedule_id=%s
+            """, (sid,))
+            schedule = cur.fetchone()
+            if not schedule:
+                return jsonify({"status": "error", "msg": "课程安排不存在"}), 404
+            
+            schedule_data = dict(schedule)
+            
+            # 删除课程安排记录
+            cur.execute("DELETE FROM course_schedule WHERE schedule_id=%s", (sid,))
+            
+            # 记录操作日志
+            if user.get("user_id"):
+                cur.execute("""
+                INSERT INTO audit_log (user_id, action, target_table, target_id, details)
+                VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    user["user_id"],
+                    "DELETE",
+                    "course_schedule",
+                    sid,
+                    f"删除课程安排: {schedule_data.get('course_name', '')} - {schedule_data.get('teacher_name', '')} ({schedule_data.get('semester', '')}, {schedule_data.get('day_of_week', '')} {schedule_data.get('period_start', '')}-{schedule_data.get('period_end', '')}节)"
+                ))
+            
+            conn.commit()
+        
+        return jsonify({"status": "ok", "msg": "删除成功"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"删除失败：{str(e)}"}), 500
+
 @app.route("/api/scores", methods=["GET"])
 def list_scores():
-    """获取成绩列表，支持按学生ID、课程ID、课程名搜索"""
+    """获取成绩列表，支持按学生ID、课程ID、课程名、学期搜索"""
     student_id = request.args.get("student_id")
     course_id = request.args.get("course_id")
     course_name = request.args.get("course_name")
+    semester = request.args.get("semester", "").strip()
     
     where = []
     params = []
@@ -1662,6 +2673,10 @@ def list_scores():
         where.append("c.course_name LIKE %s")
         params.append(f"%{course_name}%")
     
+    if semester:
+        where.append("cs.semester = %s")
+        params.append(semester)
+    
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
     try:
@@ -1670,11 +2685,12 @@ def list_scores():
             # 使用 COALESCE 兼容没有 version 字段的情况
             cur.execute(f"""
             SELECT sc.score_id, s.student_id, s.name AS student_name,
-                   c.course_id, c.course_name, c.semester, c.credit,
+                   c.course_id, c.course_name, cs.semester, c.credit,
                    sc.score, sc.exam_date, COALESCE(sc.version, 1) AS version
             FROM scores sc
-            JOIN students s ON sc.student_id = s.student_id
-            JOIN courses c  ON sc.course_id = c.course_id
+            JOIN course_selection cs ON sc.selection_id = cs.selection_id
+            JOIN students s ON cs.student_id = s.student_id
+            JOIN courses c  ON cs.course_id = c.course_id
             {where_sql}
             ORDER BY sc.score_id DESC
             """, params)
@@ -1687,11 +2703,12 @@ def list_scores():
                 cur = conn.cursor()
                 cur.execute(f"""
                 SELECT sc.score_id, s.student_id, s.name AS student_name,
-                       c.course_id, c.course_name, c.semester, c.credit,
+                       c.course_id, c.course_name, cs.semester, c.credit,
                        sc.score, sc.exam_date
                 FROM scores sc
-                JOIN students s ON sc.student_id = s.student_id
-                JOIN courses c  ON sc.course_id = c.course_id
+                JOIN course_selection cs ON sc.selection_id = cs.selection_id
+                JOIN students s ON cs.student_id = s.student_id
+                JOIN courses c  ON cs.course_id = c.course_id
                 {where_sql}
                 ORDER BY sc.score_id DESC
                 """, params)
@@ -1719,37 +2736,53 @@ def add_score():
         with get_conn() as conn:
             cur = conn.cursor()
             
-            # 检查是否已选过该课程
+            # 获取学期信息（从课程表或请求参数）
+            semester = data.get("semester")
+            if not semester:
+                # 尝试从课程表获取默认学期
+                cur.execute("SELECT semester FROM courses WHERE course_id = %s", (course_id,))
+                course_info = cur.fetchone()
+                if course_info and course_info.get("semester"):
+                    semester = course_info["semester"]
+                else:
+                    semester = "2024-2025-1"  # 默认学期
+            
+            # 检查是否已选过该课程（同一学期）
             cur.execute("""
-            SELECT score_id FROM scores 
-            WHERE student_id=%s AND course_id=%s
-            """, (student_id, course_id))
-            existing = cur.fetchone()
+            SELECT selection_id FROM course_selection 
+            WHERE student_id=%s AND course_id=%s AND semester=%s
+            """, (student_id, course_id, semester))
+            existing_selection = cur.fetchone()
             
-            if existing:
-                return jsonify({"status": "error", "msg": "已选该课程"}), 400
-            
-            # 检查 version 字段是否存在
-            cur.execute("""
-                SELECT COUNT(*) as cnt
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'scores'
-                  AND COLUMN_NAME = 'version'
-            """)
-            has_version = cur.fetchone().get('cnt', 0) > 0
-            
-            # 插入选课记录（score 和 exam_date 可以为 NULL）
-            if has_version:
+            if existing_selection:
+                # 如果已选课，检查是否已有成绩记录
+                selection_id = existing_selection["selection_id"]
                 cur.execute("""
-                INSERT INTO scores (student_id, course_id, score, exam_date, version)
-                VALUES (%s, %s, %s, %s, 1)
-                """, (student_id, course_id, score, exam_date))
+                SELECT score_id FROM scores WHERE selection_id=%s
+                """, (selection_id,))
+                existing_score = cur.fetchone()
+                
+                if existing_score:
+                    return jsonify({"status": "error", "msg": "已选该课程"}), 400
+                else:
+                    # 已有选课记录但没有成绩，创建成绩记录
+                    cur.execute("""
+                    INSERT INTO scores (selection_id, score, exam_date)
+                    VALUES (%s, %s, %s)
+                    """, (selection_id, score, exam_date))
             else:
+                # 创建选课记录
                 cur.execute("""
-                INSERT INTO scores (student_id, course_id, score, exam_date)
-                VALUES (%s, %s, %s, %s)
-                """, (student_id, course_id, score, exam_date))
+                INSERT INTO course_selection (student_id, course_id, semester)
+                VALUES (%s, %s, %s)
+                """, (student_id, course_id, semester))
+                selection_id = cur.lastrowid
+                
+                # 创建成绩记录（score 和 exam_date 可以为 NULL）
+                cur.execute("""
+                INSERT INTO scores (selection_id, score, exam_date)
+                VALUES (%s, %s, %s)
+                """, (selection_id, score, exam_date))
             conn.commit()
             
         return jsonify({"status": "ok"})
@@ -1759,71 +2792,398 @@ def add_score():
 @app.route("/api/teacher/scores", methods=["GET"])
 def get_teacher_scores():
     """获取当前教师教授的课程的学生成绩"""
-    token = request.headers.get("X-Token", "")
-    user = _get_user_from_token(token)
-    if not user:
-        return jsonify({"status": "error", "msg": "请先登录"}), 401
-    if user["role"] != "teacher":
-        return jsonify({"status": "error", "msg": "仅教师可以访问"}), 403
+    try:
+        token = request.headers.get("X-Token", "")
+        user = _get_user_from_token(token)
+        if not user:
+            return jsonify({"status": "error", "msg": "请先登录"}), 401
+        if user["role"] != "teacher":
+            return jsonify({"status": "error", "msg": "仅教师可以访问"}), 403
 
-    # 获取当前教师的teacher_id
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT teacher_id FROM teachers WHERE user_id=%s
-            """,
-            (user["user_id"],),
-        )
-        teacher_row = cur.fetchone()
-        if not teacher_row:
-            return jsonify({"status": "error", "msg": "未找到教师档案"}), 404
+        # 获取当前教师的teacher_id
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT teacher_id FROM teachers WHERE user_id=%s
+                """,
+                (user["user_id"],),
+            )
+            teacher_row = cur.fetchone()
+            if not teacher_row:
+                return jsonify({"status": "error", "msg": "未找到教师档案"}), 404
 
-        teacher_id = teacher_row["teacher_id"]
+            teacher_id = teacher_row["teacher_id"]
 
-        # 获取过滤参数（转换为None或整数）
-        course_id = request.args.get("course_id")
-        if course_id:
-            try:
-                course_id = int(course_id)
-            except ValueError:
+            # 获取过滤参数（转换为None或整数）
+            course_id = request.args.get("course_id")
+            if course_id:
+                try:
+                    course_id = int(course_id)
+                except ValueError:
+                    course_id = None
+            else:
                 course_id = None
-        else:
-            course_id = None
 
-        student_id = request.args.get("student_id")
-        if student_id:
-            try:
-                student_id = int(student_id)
-            except ValueError:
+            student_id = request.args.get("student_id")
+            if student_id:
+                try:
+                    student_id = int(student_id)
+                except ValueError:
+                    student_id = None
+            else:
                 student_id = None
-        else:
-            student_id = None
 
-        # 构建查询（包含版本号，使用 COALESCE 兼容没有 version 字段的情况）
-        cur.execute(
-            """
-            SELECT
-                s.score_id,
-                st.student_id,
-                st.name AS student_name,
-                c.course_name,
-                s.score,
-                c.semester,
-                COALESCE(s.version, 1) AS version
-            FROM scores s
-            JOIN students st ON s.student_id = st.student_id
-            JOIN courses c   ON s.course_id = c.course_id
-            WHERE c.teacher_id = %s
-              AND (%s IS NULL OR c.course_id = %s)
-              AND (%s IS NULL OR st.student_id = %s)
-            ORDER BY st.student_id
-            """,
-            (teacher_id, course_id, course_id, student_id, student_id),
-        )
-        rows = cur.fetchall()
+            course_name = request.args.get("course_name", "").strip()
+            if not course_name:
+                course_name = None
 
-    return jsonify({"status": "ok", "data": [dict(r) for r in rows]})
+            # 检查 version 字段是否存在
+            cur.execute("""
+                SELECT COUNT(*) as cnt
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'scores'
+                  AND COLUMN_NAME = 'version'
+            """)
+            has_version = cur.fetchone().get('cnt', 0) > 0
+
+            # 构建查询（根据 version 字段是否存在选择不同的查询）
+            if has_version:
+                cur.execute(
+                    """
+                    SELECT
+                        s.score_id,
+                        st.student_id,
+                        st.name AS student_name,
+                        c.course_id,
+                        c.course_name,
+                        s.score,
+                        cs.semester,
+                        COALESCE(s.version, 1) AS version
+                    FROM scores s
+                    JOIN course_selection cs ON s.selection_id = cs.selection_id
+                    JOIN students st ON cs.student_id = st.student_id
+                    JOIN courses c   ON cs.course_id = c.course_id
+                    WHERE c.teacher_id = %s
+                      AND (%s IS NULL OR c.course_id = %s)
+                      AND (%s IS NULL OR st.student_id = %s)
+                      AND (%s IS NULL OR c.course_name LIKE %s)
+                    ORDER BY st.student_id
+                    """,
+                    (teacher_id, course_id, course_id, student_id, student_id, 
+                     course_name, f"%{course_name}%" if course_name else None),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT
+                        s.score_id,
+                        st.student_id,
+                        st.name AS student_name,
+                        c.course_id,
+                        c.course_name,
+                        s.score,
+                        cs.semester,
+                        1 AS version
+                    FROM scores s
+                    JOIN course_selection cs ON s.selection_id = cs.selection_id
+                    JOIN students st ON cs.student_id = st.student_id
+                    JOIN courses c   ON cs.course_id = c.course_id
+                    WHERE c.teacher_id = %s
+                      AND (%s IS NULL OR c.course_id = %s)
+                      AND (%s IS NULL OR st.student_id = %s)
+                      AND (%s IS NULL OR c.course_name LIKE %s)
+                    ORDER BY st.student_id
+                    """,
+                    (teacher_id, course_id, course_id, student_id, student_id, 
+                     course_name, f"%{course_name}%" if course_name else None),
+                )
+            rows = cur.fetchall()
+
+        return jsonify({"status": "ok", "data": [dict(r) for r in rows]})
+    except Exception as e:
+        import traceback
+        print(f"get_teacher_scores 错误: {e}")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "msg": f"获取成绩失败：{str(e)}"}), 500
+
+
+@app.route("/api/student/schedule", methods=["GET"])
+def get_student_schedule():
+    """获取学生的课程表"""
+    try:
+        token = request.headers.get("X-Token", "")
+        user = _get_user_from_token(token)
+        if not user:
+            return jsonify({"status": "error", "msg": "请先登录"}), 401
+        
+        # 获取student_id参数（可以是当前登录学生，也可以是管理员查询其他学生）
+        student_id_param = request.args.get("student_id")
+        semester = request.args.get("semester", "").strip()
+        
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 如果是学生角色，只能查看自己的课程表
+            if user["role"] == "student":
+                # 获取当前学生的student_id
+                cur.execute("SELECT student_id FROM students WHERE user_id=%s", (user["user_id"],))
+                student_row = cur.fetchone()
+                if not student_row:
+                    return jsonify({"status": "error", "msg": "未找到学生档案"}), 404
+                student_id = student_row["student_id"]
+            elif user["role"] in ["admin", "teacher"]:
+                # 管理员和教师可以查询指定学生的课程表
+                if not student_id_param:
+                    return jsonify({"status": "error", "msg": "请提供学生ID"}), 400
+                try:
+                    student_id = int(student_id_param)
+                except ValueError:
+                    return jsonify({"status": "error", "msg": "学生ID格式错误"}), 400
+            else:
+                return jsonify({"status": "error", "msg": "权限不足"}), 403
+            
+            # 查询该学生已选的课程
+            where_clause = "WHERE cs.student_id = %s"
+            params = [student_id]
+            
+            if semester:
+                where_clause += " AND cs.semester = %s"
+                params.append(semester)
+            
+            # 查询课程表信息，关联课程、教师、教室等信息
+            cur.execute(f"""
+                SELECT 
+                    cs.course_id,
+                    c.course_name,
+                    c.credit,
+                    cs.semester,
+                    cs_schedule.schedule_id,
+                    cs_schedule.day_of_week,
+                    cs_schedule.period_start,
+                    cs_schedule.period_end,
+                    cs_schedule.weeks,
+                    cl.building,
+                    cl.room,
+                    t.name AS teacher_name
+                FROM course_selection cs
+                JOIN courses c ON cs.course_id = c.course_id
+                LEFT JOIN course_schedule cs_schedule ON cs.course_id = cs_schedule.course_id 
+                    AND cs.semester = cs_schedule.semester
+                LEFT JOIN classrooms cl ON cs_schedule.classroom_id = cl.classroom_id
+                LEFT JOIN teachers t ON cs_schedule.teacher_id = t.teacher_id
+                {where_clause}
+                ORDER BY cs.course_id, cs_schedule.day_of_week, cs_schedule.period_start
+            """, params)
+            
+            rows = cur.fetchall()
+            
+            # 组织数据：按课程分组
+            schedule_data = []
+            for row in rows:
+                schedule_item = {
+                    "course_id": row["course_id"],
+                    "course_name": row["course_name"],
+                    "credit": row["credit"],
+                    "semester": row["semester"],
+                    "schedule_id": row["schedule_id"],
+                    "day_of_week": row["day_of_week"],
+                    "period_start": row["period_start"],
+                    "period_end": row["period_end"],
+                    "weeks": row["weeks"],
+                    "classroom": f"{row['building'] or ''}{row['room'] or ''}".strip() if row.get("building") or row.get("room") else "",
+                    "teacher_name": row["teacher_name"] or ""
+                }
+                schedule_data.append(schedule_item)
+            
+        return jsonify({"status": "ok", "data": schedule_data})
+    except Exception as e:
+        import traceback
+        print(f"get_student_schedule 错误: {e}")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "msg": f"获取课程表失败：{str(e)}"}), 500
+
+
+@app.route("/api/teacher/schedule", methods=["GET"])
+def get_teacher_schedule():
+    """获取教师的课程表"""
+    try:
+        token = request.headers.get("X-Token", "")
+        user = _get_user_from_token(token)
+        if not user:
+            return jsonify({"status": "error", "msg": "请先登录"}), 401
+        
+        # 获取teacher_id参数（可以是当前登录教师，也可以是管理员查询其他教师）
+        teacher_id_param = request.args.get("teacher_id")
+        semester = request.args.get("semester", "").strip()
+        
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 如果是教师角色，只能查看自己的课程表
+            if user["role"] == "teacher":
+                # 获取当前教师的teacher_id
+                cur.execute("SELECT teacher_id FROM teachers WHERE user_id=%s", (user["user_id"],))
+                teacher_row = cur.fetchone()
+                if not teacher_row:
+                    return jsonify({"status": "error", "msg": "未找到教师档案"}), 404
+                teacher_id = teacher_row["teacher_id"]
+            elif user["role"] == "admin":
+                # 管理员可以查询指定教师的课程表
+                if not teacher_id_param:
+                    return jsonify({"status": "error", "msg": "请提供教师ID"}), 400
+                try:
+                    teacher_id = int(teacher_id_param)
+                except ValueError:
+                    return jsonify({"status": "error", "msg": "教师ID格式错误"}), 400
+            else:
+                return jsonify({"status": "error", "msg": "权限不足"}), 403
+            
+            # 查询该教师教授的课程的课程表信息
+            where_clause = "WHERE cs.teacher_id = %s"
+            params = [teacher_id]
+            
+            if semester:
+                where_clause += " AND cs.semester = %s"
+                params.append(semester)
+            
+            # 查询课程表信息，关联课程、教室等信息
+            cur.execute(f"""
+                SELECT 
+                    cs.course_id,
+                    c.course_name,
+                    c.credit,
+                    cs.semester,
+                    cs.schedule_id,
+                    cs.day_of_week,
+                    cs.period_start,
+                    cs.period_end,
+                    cs.weeks,
+                    cl.building,
+                    cl.room,
+                    t.name AS teacher_name
+                FROM course_schedule cs
+                JOIN courses c ON cs.course_id = c.course_id
+                LEFT JOIN classrooms cl ON cs.classroom_id = cl.classroom_id
+                LEFT JOIN teachers t ON cs.teacher_id = t.teacher_id
+                {where_clause}
+                ORDER BY cs.course_id, cs.day_of_week, cs.period_start
+            """, params)
+            
+            rows = cur.fetchall()
+            
+            # 组织数据：按课程分组
+            schedule_data = []
+            for row in rows:
+                schedule_item = {
+                    "course_id": row["course_id"],
+                    "course_name": row["course_name"],
+                    "credit": row["credit"],
+                    "semester": row["semester"],
+                    "schedule_id": row["schedule_id"],
+                    "day_of_week": row["day_of_week"],
+                    "period_start": row["period_start"],
+                    "period_end": row["period_end"],
+                    "weeks": row["weeks"],
+                    "classroom": f"{row['building'] or ''}{row['room'] or ''}".strip() if row.get("building") or row.get("room") else "",
+                    "teacher_name": row["teacher_name"] or ""
+                }
+                schedule_data.append(schedule_item)
+            
+        return jsonify({"status": "ok", "data": schedule_data})
+    except Exception as e:
+        import traceback
+        print(f"get_teacher_schedule 错误: {e}")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "msg": f"获取课程表失败：{str(e)}"}), 500
+
+
+@app.route("/api/student/my-courses", methods=["GET"])
+def get_student_my_courses():
+    """获取学生的已选课程列表（直接从course_selection表查询）"""
+    try:
+        token = request.headers.get("X-Token", "")
+        user = _get_user_from_token(token)
+        if not user:
+            return jsonify({"status": "error", "msg": "请先登录"}), 401
+        
+        # 获取student_id参数（可以是当前登录学生，也可以是管理员查询其他学生）
+        student_id_param = request.args.get("student_id")
+        course_name = request.args.get("course_name", "").strip()
+        semester = request.args.get("semester", "").strip()
+        
+        with get_conn() as conn:
+            cur = conn.cursor()
+            
+            # 如果是学生角色，只能查看自己的课程
+            if user["role"] == "student":
+                # 获取当前学生的student_id
+                cur.execute("SELECT student_id FROM students WHERE user_id=%s", (user["user_id"],))
+                student_row = cur.fetchone()
+                if not student_row:
+                    return jsonify({"status": "error", "msg": "未找到学生档案"}), 404
+                student_id = student_row["student_id"]
+            elif user["role"] in ["admin", "teacher"]:
+                # 管理员和教师可以查询指定学生的课程
+                if not student_id_param:
+                    return jsonify({"status": "error", "msg": "请提供学生ID"}), 400
+                try:
+                    student_id = int(student_id_param)
+                except ValueError:
+                    return jsonify({"status": "error", "msg": "学生ID格式错误"}), 400
+            else:
+                return jsonify({"status": "error", "msg": "权限不足"}), 403
+            
+            # 构建查询条件
+            where_clause = "WHERE cs.student_id = %s"
+            params = [student_id]
+            
+            if course_name:
+                where_clause += " AND c.course_name LIKE %s"
+                params.append(f"%{course_name}%")
+            
+            if semester:
+                where_clause += " AND cs.semester = %s"
+                params.append(semester)
+            
+            # 查询已选课程，关联课程和教师信息
+            cur.execute(f"""
+                SELECT 
+                    cs.course_id,
+                    c.course_name,
+                    c.credit,
+                    cs.semester,
+                    t.name AS teacher_name,
+                    cs.selection_id
+                FROM course_selection cs
+                JOIN courses c ON cs.course_id = c.course_id
+                LEFT JOIN teachers t ON c.teacher_id = t.teacher_id
+                {where_clause}
+                ORDER BY cs.course_id DESC
+            """, params)
+            
+            rows = cur.fetchall()
+            
+            # 转换为字典列表
+            courses_data = []
+            for row in rows:
+                course_item = {
+                    "course_id": row["course_id"],
+                    "course_name": row["course_name"] or "",
+                    "credit": row["credit"] or 0,
+                    "semester": row["semester"] or "",
+                    "teacher_name": row["teacher_name"] or "",
+                    "selection_id": row["selection_id"]
+                }
+                courses_data.append(course_item)
+            
+        return jsonify({"status": "ok", "data": courses_data})
+    except Exception as e:
+        import traceback
+        print(f"get_student_my_courses 错误: {e}")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "msg": f"获取已选课程失败：{str(e)}"}), 500
 
 
 @app.route("/api/scores/<int:eid>", methods=["PUT"])
@@ -1848,6 +3208,16 @@ def update_score(eid):
     with get_conn(isolation_level='REPEATABLE READ') as conn:
         cur = conn.cursor()
 
+        # 先检查 version 字段是否存在
+        cur.execute("""
+            SELECT COUNT(*) as cnt
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'scores'
+              AND COLUMN_NAME = 'version'
+        """)
+        has_version = cur.fetchone().get('cnt', 0) > 0
+
         # 如果是教师，需要验证该课程属于该教师
         if user["role"] == "teacher":
             # 获取当前教师的teacher_id
@@ -1864,16 +3234,30 @@ def update_score(eid):
             teacher_id = teacher_row["teacher_id"]
 
             # 使用悲观锁：SELECT FOR UPDATE 锁定行，防止并发修改
-            cur.execute(
-                """
-                SELECT s.score_id, s.score AS old_score, COALESCE(s.version, 1) AS version, c.course_id
-                FROM scores s
-                JOIN courses c ON s.course_id = c.course_id
-                WHERE s.score_id = %s AND c.teacher_id = %s
-                FOR UPDATE
-                """,
-                (eid, teacher_id),
-            )
+            if has_version:
+                cur.execute(
+                    """
+                    SELECT s.score_id, s.score AS old_score, COALESCE(s.version, 1) AS version, c.course_id
+                    FROM scores s
+                    JOIN course_selection cs ON s.selection_id = cs.selection_id
+                    JOIN courses c ON cs.course_id = c.course_id
+                    WHERE s.score_id = %s AND c.teacher_id = %s
+                    FOR UPDATE
+                    """,
+                    (eid, teacher_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT s.score_id, s.score AS old_score, 1 AS version, c.course_id
+                    FROM scores s
+                    JOIN course_selection cs ON s.selection_id = cs.selection_id
+                    JOIN courses c ON cs.course_id = c.course_id
+                    WHERE s.score_id = %s AND c.teacher_id = %s
+                    FOR UPDATE
+                    """,
+                    (eid, teacher_id),
+                )
             score_row = cur.fetchone()
             if not score_row:
                 return jsonify({"status": "error", "msg": "无权修改该成绩或成绩不存在"}), 403
@@ -1882,15 +3266,26 @@ def update_score(eid):
             current_version = score_row.get("version", 1)
         else:
             # 管理员可以修改任何成绩，使用悲观锁锁定行
-            cur.execute(
-                """
-                SELECT score_id, score AS old_score, COALESCE(version, 1) AS version
-                FROM scores
-                WHERE score_id = %s
-                FOR UPDATE
-                """,
-                (eid,),
-            )
+            if has_version:
+                cur.execute(
+                    """
+                    SELECT score_id, score AS old_score, COALESCE(version, 1) AS version
+                    FROM scores
+                    WHERE score_id = %s
+                    FOR UPDATE
+                    """,
+                    (eid,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT score_id, score AS old_score, 1 AS version
+                    FROM scores
+                    WHERE score_id = %s
+                    FOR UPDATE
+                    """,
+                    (eid,),
+                )
             score_row = cur.fetchone()
             if not score_row:
                 return jsonify({"status": "error", "msg": "成绩不存在"}), 404
@@ -2007,13 +3402,33 @@ def delete_score():
         
         with get_conn() as conn:
             cur = conn.cursor()
+            # 先查找选课记录
+            semester = request.args.get("semester") or (request.json or {}).get("semester")
+            if semester:
+                cur.execute("""
+                SELECT selection_id FROM course_selection 
+                WHERE student_id=%s AND course_id=%s AND semester=%s
+                """, (student_id, course_id, semester))
+            else:
+                cur.execute("""
+                SELECT selection_id FROM course_selection 
+                WHERE student_id=%s AND course_id=%s
+                LIMIT 1
+                """, (student_id, course_id))
+            
+            selection = cur.fetchone()
+            if not selection:
+                return jsonify({"status": "error", "msg": "未找到选课记录"}), 404
+            
+            # 删除选课记录（会自动级联删除关联的 scores 记录）
+            selection_id = selection["selection_id"]
             cur.execute("""
-            DELETE FROM scores 
-            WHERE student_id=%s AND course_id=%s
-            """, (student_id, course_id))
+            DELETE FROM course_selection 
+            WHERE selection_id=%s
+            """, (selection_id,))
             
             if cur.rowcount == 0:
-                return jsonify({"status": "error", "msg": "未找到选课记录"}), 404
+                return jsonify({"status": "error", "msg": "删除失败"}), 500
             
             conn.commit()
             
@@ -2057,7 +3472,7 @@ def batch_import_scores():
             has_version = cur.fetchone().get('cnt', 0) > 0
             
             # 获取表级锁（防止并发批量操作冲突）
-            cur.execute("LOCK TABLES scores WRITE, students READ, courses READ")
+            cur.execute("LOCK TABLES scores WRITE, course_selection WRITE, students READ, courses READ")
             
             try:
                 for idx, score_item in enumerate(scores_data):
@@ -2066,11 +3481,21 @@ def batch_import_scores():
                         course_id = score_item.get("course_id")
                         score = score_item.get("score")
                         exam_date = score_item.get("exam_date")
+                        semester = score_item.get("semester")
                         
                         if not student_id or not course_id:
                             error_count += 1
                             errors.append(f"第{idx+1}条：学生ID和课程ID不能为空")
                             continue
+                        
+                        # 如果没有提供学期，尝试从课程表获取
+                        if not semester:
+                            cur.execute("SELECT semester FROM courses WHERE course_id=%s", (course_id,))
+                            course_info = cur.fetchone()
+                            if course_info and course_info.get("semester"):
+                                semester = course_info["semester"]
+                            else:
+                                semester = "2024-2025-1"  # 默认学期
                         
                         # 检查学生和课程是否存在
                         cur.execute("SELECT student_id FROM students WHERE student_id=%s", (student_id,))
@@ -2085,57 +3510,56 @@ def batch_import_scores():
                             errors.append(f"第{idx+1}条：课程ID {course_id} 不存在")
                             continue
                         
-                        # 使用悲观锁检查是否已存在该选课记录
-                        if has_version:
-                            cur.execute("""
-                                SELECT score_id, COALESCE(version, 1) AS version FROM scores 
-                                WHERE student_id=%s AND course_id=%s
-                                FOR UPDATE
-                            """, (student_id, course_id))
-                        else:
+                        # 检查是否已存在选课记录
+                        cur.execute("""
+                            SELECT selection_id FROM course_selection 
+                            WHERE student_id=%s AND course_id=%s AND semester=%s
+                            FOR UPDATE
+                        """, (student_id, course_id, semester))
+                        existing_selection = cur.fetchone()
+                        
+                        if existing_selection:
+                            selection_id = existing_selection["selection_id"]
+                            # 检查是否已有成绩记录
                             cur.execute("""
                                 SELECT score_id FROM scores 
-                                WHERE student_id=%s AND course_id=%s
+                                WHERE selection_id=%s
                                 FOR UPDATE
-                            """, (student_id, course_id))
-                        existing = cur.fetchone()
-                        
-                        if existing:
-                            # 如果已存在，更新成绩
-                            if has_version:
-                                # 有 version 字段，使用乐观锁
-                                current_version = existing.get("version", 1)
-                                new_version = current_version + 1
+                            """, (selection_id,))
+                            existing_score = cur.fetchone()
+                            
+                            if existing_score:
+                                # 更新成绩
                                 cur.execute("""
                                     UPDATE scores 
-                                    SET score=%s, exam_date=%s, version=%s
-                                    WHERE student_id=%s AND course_id=%s AND version=%s
-                                """, (score, exam_date, new_version, student_id, course_id, current_version))
+                                    SET score=%s, exam_date=%s
+                                    WHERE selection_id=%s
+                                """, (score, exam_date, selection_id))
                                 if cur.rowcount > 0:
                                     success_count += 1
                                 else:
                                     error_count += 1
-                                    errors.append(f"第{idx+1}条：更新失败（版本冲突）")
+                                    errors.append(f"第{idx+1}条：更新失败")
                             else:
-                                # 没有 version 字段，直接更新
+                                # 创建成绩记录
                                 cur.execute("""
-                                    UPDATE scores 
-                                    SET score=%s, exam_date=%s
-                                    WHERE student_id=%s AND course_id=%s
-                                """, (score, exam_date, student_id, course_id))
+                                    INSERT INTO scores (selection_id, score, exam_date)
+                                    VALUES (%s, %s, %s)
+                                """, (selection_id, score, exam_date))
                                 success_count += 1
                         else:
-                            # 如果不存在，插入新记录
-                            if has_version:
-                                cur.execute("""
-                                    INSERT INTO scores (student_id, course_id, score, exam_date, version)
-                                    VALUES (%s, %s, %s, %s, 1)
-                                """, (student_id, course_id, score, exam_date))
-                            else:
-                                cur.execute("""
-                                    INSERT INTO scores (student_id, course_id, score, exam_date)
-                                    VALUES (%s, %s, %s, %s)
-                                """, (student_id, course_id, score, exam_date))
+                            # 创建选课记录
+                            cur.execute("""
+                                INSERT INTO course_selection (student_id, course_id, semester)
+                                VALUES (%s, %s, %s)
+                            """, (student_id, course_id, semester))
+                            selection_id = cur.lastrowid
+                            
+                            # 创建成绩记录
+                            cur.execute("""
+                                INSERT INTO scores (selection_id, score, exam_date)
+                                VALUES (%s, %s, %s)
+                            """, (selection_id, score, exam_date))
                             success_count += 1
                             
                     except Exception as e:
@@ -2202,7 +3626,7 @@ def cleanup_abnormal_scores():
                 # 清理空成绩（score为NULL的记录）
                 if cleanup_empty:
                     cur.execute("""
-                        SELECT score_id, student_id, course_id 
+                        SELECT score_id, selection_id 
                         FROM scores 
                         WHERE score IS NULL
                         FOR UPDATE
@@ -2214,12 +3638,13 @@ def cleanup_abnormal_scores():
                         deleted_count += cur.rowcount
                         details.append(f"清理空成绩：{cur.rowcount}条")
                 
-                # 清理重复成绩（同一学生同一课程有多条记录，保留score_id最大的）
+                # 清理重复成绩（同一selection_id有多条记录，保留score_id最大的）
+                # 注意：新架构中每个selection_id应该只有一个score，但为了兼容性保留此逻辑
                 if cleanup_duplicates:
                     cur.execute("""
-                        SELECT student_id, course_id, COUNT(*) as cnt
+                        SELECT selection_id, COUNT(*) as cnt
                         FROM scores
-                        GROUP BY student_id, course_id
+                        GROUP BY selection_id
                         HAVING cnt > 1
                     """)
                     duplicates = cur.fetchall()
@@ -2227,24 +3652,23 @@ def cleanup_abnormal_scores():
                     if duplicates:
                         total_deleted = 0
                         for dup in duplicates:
-                            student_id = dup["student_id"]
-                            course_id = dup["course_id"]
+                            selection_id = dup["selection_id"]
                             # 使用悲观锁获取要保留的score_id（最大的）
                             cur.execute("""
                                 SELECT MAX(score_id) as max_score_id
                                 FROM scores
-                                WHERE student_id=%s AND course_id=%s
+                                WHERE selection_id=%s
                                 FOR UPDATE
-                            """, (student_id, course_id))
+                            """, (selection_id,))
                             max_row = cur.fetchone()
                             if max_row and max_row["max_score_id"]:
                                 max_score_id = max_row["max_score_id"]
                                 # 删除除最大score_id外的所有记录
                                 cur.execute("""
                                     DELETE FROM scores
-                                    WHERE student_id=%s AND course_id=%s
+                                    WHERE selection_id=%s
                                     AND score_id != %s
-                                """, (student_id, course_id, max_score_id))
+                                """, (selection_id, max_score_id))
                                 total_deleted += cur.rowcount
                         
                         deleted_count += total_deleted
@@ -2324,7 +3748,8 @@ def get_teacher_course_stats():
                 MAX(s.score) AS max_score,
                 SUM(CASE WHEN s.score >= 60 THEN 1 ELSE 0 END) AS pass_count
             FROM courses c
-            LEFT JOIN scores s ON c.course_id = s.course_id
+            LEFT JOIN course_selection cs ON c.course_id = cs.course_id
+            LEFT JOIN scores s ON cs.selection_id = s.selection_id
             WHERE c.course_id = %s
               AND c.teacher_id = %s
             GROUP BY c.course_name
@@ -2341,7 +3766,8 @@ def get_teacher_course_stats():
             """
             SELECT s.score
             FROM scores s
-            JOIN courses c ON s.course_id = c.course_id
+            JOIN course_selection cs ON s.selection_id = cs.selection_id
+            JOIN courses c ON cs.course_id = c.course_id
             WHERE c.course_id = %s
               AND c.teacher_id = %s
               AND s.score IS NOT NULL
@@ -2475,8 +3901,9 @@ def stats_debug():
             cur.execute("""
                 SELECT COUNT(*) as total
                 FROM scores sc
-                INNER JOIN students s ON sc.student_id = s.student_id
-                INNER JOIN courses c ON sc.course_id = c.course_id
+                INNER JOIN course_selection cs ON sc.selection_id = cs.selection_id
+                INNER JOIN students s ON cs.student_id = s.student_id
+                INNER JOIN courses c ON cs.course_id = c.course_id
             """)
             join_count = cur.fetchone()["total"]
             
@@ -2564,6 +3991,149 @@ def stats_data_quality():
     
     issues = check_data_quality()
     return jsonify({"status": "ok", "data": issues, "count": len(issues)})
+
+@app.route("/api/stats/comprehensive", methods=["GET"])
+def stats_comprehensive():
+    """综合统计 - 展示各个表的基本信息"""
+    token = request.headers.get("X-Token", "")
+    user = _get_user_from_token(token)
+    if not user:
+        return jsonify({"status": "error", "msg": "请先登录"}), 401
+    if user.get("role") != "admin":
+        return jsonify({"status": "error", "msg": "仅管理员可以访问"}), 403
+    
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            stats = {}
+            
+            # 用户表统计
+            cur.execute("SELECT COUNT(*) as total FROM users")
+            stats["users"] = {
+                "total": cur.fetchone()["total"],
+                "by_role": {}
+            }
+            cur.execute("SELECT role, COUNT(*) as count FROM users GROUP BY role")
+            for row in cur.fetchall():
+                stats["users"]["by_role"][row["role"]] = row["count"]
+            
+            # 学生表统计
+            cur.execute("SELECT COUNT(*) as total FROM students")
+            stats["students"] = {
+                "total": cur.fetchone()["total"],
+                "by_major": {},
+                "by_grade": {},
+                "by_gender": {}
+            }
+            cur.execute("SELECT major, COUNT(*) as count FROM students WHERE major IS NOT NULL AND major != '' GROUP BY major")
+            for row in cur.fetchall():
+                stats["students"]["by_major"][row["major"]] = row["count"]
+            cur.execute("SELECT grade, COUNT(*) as count FROM students WHERE grade IS NOT NULL GROUP BY grade ORDER BY grade")
+            for row in cur.fetchall():
+                stats["students"]["by_grade"][f"{row['grade']}年级"] = row["count"]
+            cur.execute("SELECT gender, COUNT(*) as count FROM students GROUP BY gender")
+            for row in cur.fetchall():
+                stats["students"]["by_gender"][row["gender"]] = row["count"]
+            
+            # 教师表统计
+            cur.execute("SELECT COUNT(*) as total FROM teachers")
+            stats["teachers"] = {
+                "total": cur.fetchone()["total"],
+                "by_department": {}
+            }
+            cur.execute("SELECT department, COUNT(*) as count FROM teachers WHERE department IS NOT NULL AND department != '' GROUP BY department")
+            for row in cur.fetchall():
+                stats["teachers"]["by_department"][row["department"]] = row["count"]
+            
+            # 课程表统计
+            cur.execute("SELECT COUNT(*) as total FROM courses")
+            stats["courses"] = {
+                "total": cur.fetchone()["total"],
+                "by_semester": {}
+            }
+            cur.execute("SELECT semester, COUNT(*) as count FROM courses WHERE semester IS NOT NULL AND semester != '' GROUP BY semester")
+            for row in cur.fetchall():
+                stats["courses"]["by_semester"][row["semester"]] = row["count"]
+            
+            # 选课表统计
+            cur.execute("SELECT COUNT(*) as total FROM course_selection")
+            stats["course_selection"] = {
+                "total": cur.fetchone()["total"],
+                "by_semester": {}
+            }
+            cur.execute("SELECT semester, COUNT(*) as count FROM course_selection GROUP BY semester")
+            for row in cur.fetchall():
+                stats["course_selection"]["by_semester"][row["semester"]] = row["count"]
+            
+            # 成绩表统计
+            cur.execute("SELECT COUNT(*) as total FROM scores")
+            total_scores = cur.fetchone()["total"]
+            cur.execute("SELECT COUNT(*) as total FROM scores WHERE score IS NOT NULL")
+            valid_scores = cur.fetchone()["total"]
+            stats["scores"] = {
+                "total": total_scores,
+                "valid_scores": valid_scores,
+                "score_distribution": {}
+            }
+            # 分数段分布
+            cur.execute("""
+                SELECT 
+                    CASE 
+                        WHEN score < 60 THEN '0-59'
+                        WHEN score < 70 THEN '60-69'
+                        WHEN score < 80 THEN '70-79'
+                        WHEN score < 90 THEN '80-89'
+                        ELSE '90-100'
+                    END as score_range,
+                    COUNT(*) as count
+                FROM scores
+                WHERE score IS NOT NULL
+                GROUP BY score_range
+                ORDER BY score_range
+            """)
+            for row in cur.fetchall():
+                stats["scores"]["score_distribution"][row["score_range"]] = row["count"]
+            
+            # 计算平均分
+            cur.execute("SELECT AVG(score) as avg_score FROM scores WHERE score IS NOT NULL")
+            avg_result = cur.fetchone()
+            stats["scores"]["avg_score"] = round(float(avg_result["avg_score"]), 2) if avg_result["avg_score"] else None
+            
+            # 教室表统计
+            cur.execute("SELECT COUNT(*) as total FROM classrooms")
+            stats["classrooms"] = {
+                "total": cur.fetchone()["total"],
+                "by_building": {},
+                "total_capacity": 0
+            }
+            cur.execute("SELECT building, COUNT(*) as count FROM classrooms WHERE building IS NOT NULL AND building != '' GROUP BY building")
+            for row in cur.fetchall():
+                stats["classrooms"]["by_building"][row["building"]] = row["count"]
+            cur.execute("SELECT SUM(capacity) as total FROM classrooms WHERE capacity IS NOT NULL")
+            capacity_result = cur.fetchone()
+            stats["classrooms"]["total_capacity"] = int(capacity_result["total"]) if capacity_result["total"] else 0
+            
+            # 课程安排表统计
+            cur.execute("SELECT COUNT(*) as total FROM course_schedule")
+            stats["course_schedule"] = {
+                "total": cur.fetchone()["total"],
+                "by_semester": {},
+                "by_day": {}
+            }
+            cur.execute("SELECT semester, COUNT(*) as count FROM course_schedule GROUP BY semester")
+            for row in cur.fetchall():
+                stats["course_schedule"]["by_semester"][row["semester"]] = row["count"]
+            cur.execute("SELECT day_of_week, COUNT(*) as count FROM course_schedule GROUP BY day_of_week")
+            for row in cur.fetchall():
+                day_map = {"Mon": "周一", "Tue": "周二", "Wed": "周三", "Thu": "周四", "Fri": "周五", "Sat": "周六", "Sun": "周日"}
+                day_cn = day_map.get(row["day_of_week"], row["day_of_week"])
+                stats["course_schedule"]["by_day"][day_cn] = row["count"]
+        
+        return jsonify({"status": "ok", "data": stats})
+    except Exception as e:
+        import traceback
+        print(f"综合统计失败: {traceback.format_exc()}")
+        return jsonify({"status": "error", "msg": f"获取统计失败：{str(e)}"}), 500
 
 # ---------- 爬虫触发 ----------
 

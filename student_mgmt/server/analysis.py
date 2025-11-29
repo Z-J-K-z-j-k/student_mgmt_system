@@ -9,10 +9,12 @@ def load_scores_df():
             df = pd.read_sql_query("""
             SELECT sc.score_id, s.student_id, s.name AS student_name,
                    c.course_id, c.course_name,
-                   sc.score, sc.exam_date, s.major, s.class_name
+                   sc.score, sc.exam_date, s.major, s.class_name,
+                   cs.semester
             FROM scores sc
-            INNER JOIN students s ON sc.student_id = s.student_id
-            INNER JOIN courses c  ON sc.course_id = c.course_id
+            INNER JOIN course_selection cs ON sc.selection_id = cs.selection_id
+            INNER JOIN students s ON cs.student_id = s.student_id
+            INNER JOIN courses c  ON cs.course_id = c.course_id
             """, conn)
         return df
     except Exception as e:
@@ -94,65 +96,74 @@ def get_school_stats():
         df = load_scores_df()
         if df.empty:
             # 如果JOIN后为空，说明scores表有数据但关联不上students或courses
-            # 这种情况下，至少返回总学生数和总记录数
+            # 这种情况下，至少返回总学生数和总记录数（scores表的总记录数）
             return {
                 "avg_score": None,
                 "pass_rate": None,
                 "excellent_rate": None,
                 "total_students": total_students,
-                "total_records": scores_count
+                "total_records": scores_count  # 返回scores表的总记录数
             }
         
         # 统计总学生数（所有选课记录中的唯一学生数）
         total_students_in_scores = int(df["student_id"].nunique()) if not df.empty else 0
-        total_records_all = len(df)
+        total_records_all = len(df)  # JOIN后的记录数
         
-        # 过滤掉空成绩（只统计有成绩的记录）
+        # 过滤掉空成绩（只统计有成绩的记录，用于计算平均分等统计值）
         df_valid = df[df["score"].notna()]
+        
+        # 计算统计值（只基于有成绩的记录）
         if df_valid.empty:
+            # 如果所有记录的score都是NULL，返回总记录数但统计值为None
             return {
                 "avg_score": None,
                 "pass_rate": None,
                 "excellent_rate": None,
                 "total_students": max(total_students, total_students_in_scores),
-                "total_records": total_records_all
+                "total_records": total_records_all  # 返回所有记录数，包括score为NULL的
             }
         
         # 计算统计值
         avg_score = df_valid["score"].mean()
         pass_rate = (df_valid["score"] >= 60).mean()
         excellent_rate = (df_valid["score"] >= 90).mean()
-        total_records = len(df_valid)
         
         # 确保所有值都是 Python 原生类型，处理 NaN 情况
+        # total_records 返回所有记录数（包括score为NULL的），这样更准确
         return {
             "avg_score": round(float(avg_score), 2) if pd.notna(avg_score) else None,
             "pass_rate": round(float(pass_rate), 4) if pd.notna(pass_rate) else None,
             "excellent_rate": round(float(excellent_rate), 4) if pd.notna(excellent_rate) else None,
             "total_students": max(total_students, total_students_in_scores),
-            "total_records": int(total_records) if pd.notna(total_records) else 0
+            "total_records": int(total_records_all) if pd.notna(total_records_all) else scores_count  # 返回所有记录数
         }
     except Exception as e:
         # 如果出错，返回空数据
         import traceback
         print(f"get_school_stats 错误: {e}")
         print(traceback.format_exc())
-        # 即使出错，也尝试获取学生总数
+        # 即使出错，也尝试获取学生总数和成绩记录数
         try:
             with get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) as total FROM students")
                 total_students_result = cur.fetchone()
                 total_students = int(total_students_result["total"]) if total_students_result else 0
+                
+                # 尝试获取scores表的记录数
+                cur.execute("SELECT COUNT(*) as total FROM scores")
+                scores_count_result = cur.fetchone()
+                scores_count = int(scores_count_result["total"]) if scores_count_result else 0
         except:
             total_students = 0
+            scores_count = 0
         
         return {
             "avg_score": None,
             "pass_rate": None,
             "excellent_rate": None,
             "total_students": total_students,
-            "total_records": 0
+            "total_records": scores_count  # 即使出错也返回scores表的记录数
         }
 
 def get_top_students(limit=10):
@@ -177,8 +188,9 @@ def get_top_students(limit=10):
             cur.execute("""
                 SELECT COUNT(*) as total
                 FROM scores sc
-                INNER JOIN students s ON sc.student_id = s.student_id
-                LEFT JOIN courses c ON sc.course_id = c.course_id
+                INNER JOIN course_selection cs ON sc.selection_id = cs.selection_id
+                INNER JOIN students s ON cs.student_id = s.student_id
+                LEFT JOIN courses c ON cs.course_id = c.course_id
                 WHERE sc.score IS NOT NULL
             """)
             join_count = cur.fetchone()["total"]
@@ -201,8 +213,9 @@ def get_top_students(limit=10):
                 COUNT(sc.score_id) AS course_count,
                 SUM(COALESCE(NULLIF(c.credit, 0), 1)) AS total_credits
             FROM students s
-            INNER JOIN scores sc ON s.student_id = sc.student_id
-            LEFT JOIN courses c ON sc.course_id = c.course_id
+            INNER JOIN course_selection cs ON s.student_id = cs.student_id
+            INNER JOIN scores sc ON cs.selection_id = sc.selection_id
+            LEFT JOIN courses c ON cs.course_id = c.course_id
             WHERE sc.score IS NOT NULL
             GROUP BY s.student_id, s.name, s.major, s.grade
             HAVING COUNT(sc.score_id) > 0
@@ -261,7 +274,8 @@ def get_course_avg_comparison():
                COUNT(sc.score_id) AS student_count,
                SUM(CASE WHEN sc.score >= 60 THEN 1 ELSE 0 END) AS pass_count
         FROM courses c
-        LEFT JOIN scores sc ON c.course_id = sc.course_id
+        LEFT JOIN course_selection cs ON c.course_id = cs.course_id
+        LEFT JOIN scores sc ON cs.selection_id = sc.selection_id
         WHERE sc.score IS NOT NULL
         GROUP BY c.course_id, c.course_name
         HAVING COUNT(sc.score_id) > 0
@@ -294,7 +308,8 @@ def get_major_stats():
                SUM(CASE WHEN sc.score >= 60 THEN 1 ELSE 0 END) AS pass_count,
                COUNT(sc.score_id) AS total_scores
         FROM students s
-        LEFT JOIN scores sc ON s.student_id = sc.student_id
+        LEFT JOIN course_selection cs ON s.student_id = cs.student_id
+        LEFT JOIN scores sc ON cs.selection_id = sc.selection_id
         WHERE s.major IS NOT NULL AND s.major != ''
         GROUP BY s.major
         HAVING COUNT(sc.score_id) > 0
@@ -334,7 +349,8 @@ def get_grade_stats():
                SUM(CASE WHEN sc.score >= 60 THEN 1 ELSE 0 END) AS pass_count,
                COUNT(sc.score_id) AS total_scores
         FROM students s
-        LEFT JOIN scores sc ON s.student_id = sc.student_id
+        LEFT JOIN course_selection cs ON s.student_id = cs.student_id
+        LEFT JOIN scores sc ON cs.selection_id = sc.selection_id
         WHERE s.grade IS NOT NULL AND sc.score IS NOT NULL
         GROUP BY s.grade
         ORDER BY s.grade ASC
@@ -376,7 +392,8 @@ def check_data_quality():
                AVG(sc.score) AS calculated_avg,
                ABS(s.gpa * 25 - AVG(sc.score)) AS diff
         FROM students s
-        JOIN scores sc ON s.student_id = sc.student_id
+        JOIN course_selection cs ON s.student_id = cs.student_id
+        JOIN scores sc ON cs.selection_id = sc.selection_id
         WHERE s.gpa IS NOT NULL AND sc.score IS NOT NULL
         GROUP BY s.student_id, s.name, s.gpa
         HAVING ABS(s.gpa * 25 - AVG(sc.score)) > 5

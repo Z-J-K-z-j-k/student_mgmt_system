@@ -6,13 +6,15 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from .pages.user_password_page import UserPasswordPage
 from .pages.students_page import StudentsPage
 from .pages.teachers_page import TeachersPage
 from .pages.courses_page import CoursesPage
 from .pages.scores_page import ScoresPage
-from .pages.comprehensive_stats_page import ComprehensiveStatsPage
 from .pages.llm_page import LLMPage
-from .pages.crawl_page import CrawlPage
+from .pages.classrooms_page import ClassroomsPage
+from .pages.course_schedule_page import CourseSchedulePage
+from .pages.comprehensive_stats_page import ComprehensiveStatsPage
 from .utils.api_client import APIClient
 from .utils.window_keeper import keep_window
 
@@ -54,12 +56,14 @@ class AdminMainWindow(QMainWindow):
 
         # 添加菜单项
         menu_items = [
+            ("🔐 用户密码管理", UserPasswordPage(self.api)),
             ("🧍‍♂️ 学生管理", StudentsPage(self.api, "admin")),
             ("👨‍🏫 教师管理", TeachersPage(self.api, "admin")),
             ("📚 课程管理", CoursesPage(self.api, "admin")),
             ("📝 成绩管理", ScoresPage(self.api, "admin", self.user_id)),
+            ("🏫 教室管理", ClassroomsPage(self.api)),
+            ("📅 课程安排管理", CourseSchedulePage(self.api)),
             ("📊 综合统计", ComprehensiveStatsPage(self.api)),
-            ("🕷️ 数据爬虫", CrawlPage(self.api)),
             ("🤖 大模型助手", LLMPage(self.api, "admin")),
         ]
 

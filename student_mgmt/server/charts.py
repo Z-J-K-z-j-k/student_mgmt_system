@@ -83,7 +83,8 @@ def generate_major_avg_bar():
             query = """
             SELECT s.major, AVG(sc.score) as avg_score
             FROM students s
-            JOIN scores sc ON s.student_id = sc.student_id
+            JOIN course_selection cs ON s.student_id = cs.student_id
+            JOIN scores sc ON cs.selection_id = sc.selection_id
             WHERE s.major IS NOT NULL AND s.major != '' AND sc.score IS NOT NULL
             GROUP BY s.major
             ORDER BY avg_score DESC
@@ -172,7 +173,8 @@ def generate_grade_trend():
             query = """
             SELECT s.grade, AVG(sc.score) as avg_score
             FROM students s
-            JOIN scores sc ON s.student_id = sc.student_id
+            JOIN course_selection cs ON s.student_id = cs.student_id
+            JOIN scores sc ON cs.selection_id = sc.selection_id
             WHERE s.grade IS NOT NULL AND sc.score IS NOT NULL
             GROUP BY s.grade
             ORDER BY s.grade ASC
@@ -329,7 +331,21 @@ def generate_score_distribution_pie():
         plt.close()
         return filename
     
+    # 确保score列是数值类型，并过滤掉无效值
+    df["score"] = pd.to_numeric(df["score"], errors='coerce')
     df_valid = df[df["score"].notna()]
+    
+    if df_valid.empty:
+        plt.figure()
+        plt.text(0.5, 0.5, "暂无有效成绩", ha="center", va="center")
+        plt.axis("off")
+        plt.savefig(filename, bbox_inches="tight")
+        plt.close()
+        return filename
+    
+    # 确保score值在合理范围内（0-100）
+    df_valid = df_valid[(df_valid["score"] >= 0) & (df_valid["score"] <= 100)]
+    
     if df_valid.empty:
         plt.figure()
         plt.text(0.5, 0.5, "暂无有效成绩", ha="center", va="center")
@@ -341,13 +357,34 @@ def generate_score_distribution_pie():
     # 分段统计
     bins = [0, 60, 70, 80, 90, 100]
     labels = ["0-59分", "60-69分", "70-79分", "80-89分", "90-100分"]
-    cut = pd.cut(df_valid["score"], bins=bins, labels=labels, include_lowest=True)
-    counts = cut.value_counts()
     
-    colors = ['#ff6b6b', '#ffd93d', '#6bcf7f', '#4ecdc4', '#45b7d1']
-    plt.figure(figsize=(8, 8))
-    plt.pie(counts.values, labels=counts.index, autopct='%1.1f%%', colors=colors, startangle=90)
-    plt.title("全校成绩分布", fontsize=14, fontweight='bold')
-    plt.savefig(filename, bbox_inches="tight", dpi=100)
-    plt.close()
+    try:
+        cut = pd.cut(df_valid["score"], bins=bins, labels=labels, include_lowest=True)
+        counts = cut.value_counts()
+        
+        # 确保所有标签都存在，即使计数为0
+        counts_dict = {}
+        for label in labels:
+            counts_dict[label] = counts.get(label, 0)
+        
+        # 转换为Series并按标签顺序排序
+        counts_series = pd.Series(counts_dict)
+        
+        colors = ['#ff6b6b', '#ffd93d', '#6bcf7f', '#4ecdc4', '#45b7d1']
+        plt.figure(figsize=(8, 8))
+        plt.pie(counts_series.values, labels=counts_series.index, autopct='%1.1f%%', colors=colors, startangle=90)
+        plt.title("全校成绩分布", fontsize=14, fontweight='bold')
+        plt.savefig(filename, bbox_inches="tight", dpi=100)
+        plt.close()
+    except Exception as e:
+        import traceback
+        print(f"生成成绩分布饼图失败: {e}")
+        print(traceback.format_exc())
+        # 生成错误提示图表
+        plt.figure()
+        plt.text(0.5, 0.5, f"图表生成失败\n{str(e)}", ha="center", va="center", fontsize=12)
+        plt.axis("off")
+        plt.savefig(filename, bbox_inches="tight")
+        plt.close()
+    
     return filename

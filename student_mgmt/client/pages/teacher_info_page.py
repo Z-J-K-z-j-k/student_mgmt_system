@@ -138,6 +138,17 @@ class TeacherInfoPage(QWidget):
         self.set_loading(True, "正在获取个人信息…")
         try:
             resp = self.api.get("/api/teacher/profile")
+            
+            if resp.status_code != 200:
+                self.set_loading(False)
+                try:
+                    error_data = resp.json()
+                    error_msg = error_data.get("msg", f"服务器返回错误：{resp.status_code}")
+                except:
+                    error_msg = f"服务器返回错误：{resp.status_code}"
+                QMessageBox.critical(self, "错误", error_msg)
+                return
+            
             data = resp.json()
         except Exception as e:
             self.set_loading(False)

@@ -87,12 +87,12 @@ def seed_data():
             teacher_id = teacher_row['teacher_id'] if teacher_row else None
             
             courses = [
-                ("高等数学", teacher_id, 4, "2024-春"),
-                ("Python程序设计", teacher_id, 3, "2024-春"),
+                (1001, "高等数学", teacher_id, 4, "2024-春"),
+                (1002, "Python程序设计", teacher_id, 3, "2024-春"),
             ]
             cur.executemany("""
-            INSERT INTO courses (course_name, teacher_id, credit, semester)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO courses (course_id, course_name, teacher_id, credit, semester)
+            VALUES (%s, %s, %s, %s, %s)
             """, courses)
             print("✅ 已插入示例课程数据")
 
@@ -108,16 +108,36 @@ def seed_data():
             
             if student_ids and course_ids:
                 from datetime import date
-                scores = [
+                semester = "2024-春"
+                # 先创建选课记录，然后创建成绩记录
+                for student_id, course_id, score, exam_date in [
                     (student_ids[0], course_ids[0], 85.0, date(2024, 6, 15)),
                     (student_ids[1], course_ids[0], 92.0, date(2024, 6, 15)),
                     (student_ids[0], course_ids[1], 88.0, date(2024, 6, 20)),
                     (student_ids[2] if len(student_ids) > 2 else student_ids[0], course_ids[1], 75.0, date(2024, 6, 20)),
-                ]
-                cur.executemany("""
-                INSERT INTO scores (student_id, course_id, score, exam_date)
-                VALUES (%s, %s, %s, %s)
-                """, scores)
+                ]:
+                    # 检查是否已有选课记录
+                    cur.execute("""
+                        SELECT selection_id FROM course_selection 
+                        WHERE student_id=%s AND course_id=%s AND semester=%s
+                    """, (student_id, course_id, semester))
+                    selection = cur.fetchone()
+                    
+                    if selection:
+                        selection_id = selection['selection_id']
+                    else:
+                        # 创建选课记录
+                        cur.execute("""
+                            INSERT INTO course_selection (student_id, course_id, semester)
+                            VALUES (%s, %s, %s)
+                        """, (student_id, course_id, semester))
+                        selection_id = cur.lastrowid
+                    
+                    # 创建成绩记录
+                    cur.execute("""
+                        INSERT INTO scores (selection_id, score, exam_date)
+                        VALUES (%s, %s, %s)
+                    """, (selection_id, score, exam_date))
                 print("✅ 已插入示例成绩数据")
 
 if __name__ == "__main__":

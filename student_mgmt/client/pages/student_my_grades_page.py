@@ -3,7 +3,7 @@ import csv
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
     QMessageBox, QPushButton, QHBoxLayout, QLabel, QComboBox,
-    QFileDialog, QDialog, QHeaderView
+    QFileDialog, QDialog, QHeaderView, QApplication, QButtonGroup
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QPixmap
@@ -11,29 +11,149 @@ from ..utils.api_client import APIClient
 import requests
 
 class GradeChartDialog(QDialog):
-    """成绩趋势图表对话框"""
+    """成绩趋势/分布图表对话框"""
     def __init__(self, parent, scores_data):
         super().__init__(parent)
-        self.setWindowTitle("成绩趋势图")
-        self.setMinimumSize(800, 600)
+        self.setWindowTitle("成绩图表")
+        
+        # 获取屏幕尺寸并设置窗口大小
+        app = QApplication.instance()
+        if app:
+            screen = app.primaryScreen()
+            if screen:
+                screen_geometry = screen.geometry()
+                screen_width = screen_geometry.width()
+                screen_height = screen_geometry.height()
+                # 宽度：半个屏幕，高度：整个屏幕
+                dialog_width = screen_width // 2
+                dialog_height = screen_height
+                self.resize(dialog_width, dialog_height)
+                self.setMinimumSize(dialog_width, dialog_height)
+            else:
+                # 如果无法获取屏幕尺寸，使用默认值
+                self.setMinimumSize(800, 600)
+                self.resize(800, 600)
+        else:
+            # 如果无法获取应用实例，使用默认值
+            self.setMinimumSize(800, 600)
+            self.resize(800, 600)
+        
         self.setModal(True)  # 设置为模态对话框
         self.scores_data = scores_data
         
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        # 导航栏区域
+        nav_layout = QHBoxLayout()
+        nav_layout.setSpacing(5)
+        nav_layout.setContentsMargins(0, 0, 0, 10)
         
+        self.chart_modes = [
+            ("trend", "📈 成绩趋势"),
+            ("distribution", "📊 成绩分布"),
+            ("pie", "🥧 成绩区间"),
+            ("semester", "🗓 学期平均分"),
+        ]
+        
+        # 创建按钮组
+        self.chart_button_group = QButtonGroup(self)
+        self.chart_buttons = []
+        self.current_chart_type = "trend"  # 默认选中第一个
+        
+        for i, (key, label) in enumerate(self.chart_modes):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            
+            # 设置按钮样式
+            if i == 0:
+                # 第一个按钮默认选中
+                btn.setChecked(True)
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #2196F3;
+                        color: white;
+                        border: none;
+                        padding: 10px 20px;
+                        border-radius: 6px;
+                        font-size: 14px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #1976D2;
+                    }
+                    QPushButton:pressed {
+                        background-color: #0D47A1;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #f5f5f5;
+                        color: #333;
+                        border: 1px solid #ddd;
+                        padding: 10px 20px;
+                        border-radius: 6px;
+                        font-size: 14px;
+                    }
+                    QPushButton:hover {
+                        background-color: #e0e0e0;
+                        border-color: #bbb;
+                    }
+                    QPushButton:checked {
+                        background-color: #2196F3;
+                        color: white;
+                        border: none;
+                        font-weight: bold;
+                    }
+                """)
+            
+            btn.clicked.connect(lambda checked, k=key: self.on_chart_type_changed(k))
+            self.chart_button_group.addButton(btn, i)
+            self.chart_buttons.append(btn)
+            nav_layout.addWidget(btn)
+        
+        nav_layout.addStretch()
+        layout.addLayout(nav_layout)
+
         # 图表标签
         self.lbl_chart = QLabel("正在生成图表...")
         self.lbl_chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_chart.setStyleSheet("font-size: 14px; padding: 20px;")
-        layout.addWidget(self.lbl_chart)
+        self.lbl_chart.setStyleSheet("""
+            QLabel {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                font-size: 14px;
+                padding: 20px;
+            }
+        """)
+        self.lbl_chart.setScaledContents(False)
+        layout.addWidget(self.lbl_chart, 1)
+        self.current_pixmap = None
         
         # 关闭按钮
         btn_close = QPushButton("关闭")
         btn_close.clicked.connect(self.accept)
         layout.addWidget(btn_close)
-        
+
         # 延迟生成图表，确保对话框先显示
         QTimer.singleShot(200, self.generate_chart_delayed)
+    
+    def on_chart_type_changed(self, chart_type):
+        """图表类型切换回调"""
+        self.current_chart_type = chart_type
+        # 更新按钮样式
+        for i, (key, _) in enumerate(self.chart_modes):
+            btn = self.chart_buttons[i]
+            if key == chart_type:
+                btn.setChecked(True)
+            else:
+                btn.setChecked(False)
+        # 重新生成图表
+        self.generate_chart_delayed()
     
     def closeEvent(self, event):
         """重写关闭事件，确保不影响父窗口"""
@@ -61,9 +181,9 @@ class GradeChartDialog(QDialog):
         try:
             if not hasattr(self, 'lbl_chart'):
                 return
-            self.generate_chart(self.scores_data)
+            chart_type = getattr(self, 'current_chart_type', 'trend')
+            self.generate_chart(self.scores_data, chart_type)
         except RuntimeError:
-            # 对象已被删除，忽略
             pass
         except Exception as e:
             try:
@@ -72,8 +192,42 @@ class GradeChartDialog(QDialog):
             except RuntimeError:
                 pass
     
-    def generate_chart(self, scores_data):
-        """生成成绩趋势图"""
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_pixmap_display()
+
+    def update_pixmap_display(self):
+        """根据标签大小自适应显示图片"""
+        if self.current_pixmap and not self.current_pixmap.isNull():
+            scaled = self.current_pixmap.scaled(
+                self.lbl_chart.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.lbl_chart.setPixmap(scaled)
+
+    def _prepare_valid_data(self, scores_data):
+        """过滤有效成绩数据"""
+        valid_data = []
+        for s in scores_data:
+            score = s.get("score")
+            if score is None:
+                continue
+            try:
+                score_val = float(score)
+            except (ValueError, TypeError):
+                continue
+            entry = {
+                "score": score_val,
+                "course_name": s.get("course_name", "未知课程"),
+                "semester": s.get("semester", ""),
+                "exam_date": s.get("exam_date", "")
+            }
+            valid_data.append(entry)
+        return valid_data
+
+    def generate_chart(self, scores_data, chart_type="trend"):
+        """生成图表"""
         try:
             # 先检查 matplotlib 是否可用
             try:
@@ -95,87 +249,169 @@ class GradeChartDialog(QDialog):
             except:
                 pass  # 如果配置失败，继续使用默认字体
             
-            # 过滤有效成绩
-            valid_scores = []
-            course_names = []
-            for s in scores_data:
-                score = s.get("score")
-                if score is not None:
-                    try:
-                        valid_scores.append(float(score))
-                        course_names.append(s.get("course_name", ""))
-                    except:
-                        pass
-            
-            if not valid_scores:
-                try:
-                    self.lbl_chart.setText("暂无有效成绩数据")
-                except RuntimeError:
-                    pass
+            valid_data = self._prepare_valid_data(scores_data)
+            if not valid_data:
+                self.lbl_chart.setText("暂无有效成绩数据")
+                self.current_pixmap = None
                 return
             
-            # 创建图表
             fig = None
             try:
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-                
-                # 成绩趋势折线图
-                ax1.plot(range(len(valid_scores)), valid_scores, marker='o', linewidth=2, markersize=8)
-                ax1.set_xlabel('Course Number', fontsize=12)
-                ax1.set_ylabel('Score', fontsize=12)
-                ax1.set_title('Score Trend', fontsize=14, fontweight='bold')
-                ax1.grid(True, alpha=0.3)
-                ax1.set_ylim(0, 100)
-                
-                # 成绩分布柱状图
-                grade_ranges = ['<60', '60-69', '70-79', '80-89', '≥90']
-                grade_counts = [
-                    sum(1 for s in valid_scores if s < 60),
-                    sum(1 for s in valid_scores if 60 <= s < 70),
-                    sum(1 for s in valid_scores if 70 <= s < 80),
-                    sum(1 for s in valid_scores if 80 <= s < 90),
-                    sum(1 for s in valid_scores if s >= 90)
-                ]
-                ax2.bar(grade_ranges, grade_counts, color=['#f44336', '#ff9800', '#ffeb3b', '#4caf50', '#2196f3'])
-                ax2.set_xlabel('Score Range', fontsize=12)
-                ax2.set_ylabel('Course Count', fontsize=12)
-                ax2.set_title('Score Distribution', fontsize=14, fontweight='bold')
-                ax2.grid(True, alpha=0.3, axis='y')
-                
-                plt.tight_layout()
-                
-                # 转换为图片
+                if chart_type == "distribution":
+                    fig = self._plot_distribution_bar(valid_data)
+                elif chart_type == "pie":
+                    fig = self._plot_distribution_pie(valid_data)
+                elif chart_type == "semester":
+                    fig = self._plot_semester_trend(valid_data)
+                else:
+                    fig = self._plot_score_trend(valid_data)
+
+                if fig is None:
+                    return
+
                 buf = BytesIO()
                 try:
-                    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+                    plt.savefig(buf, format='png', dpi=120, bbox_inches='tight', facecolor='white')
                     buf.seek(0)
                     pixmap = QPixmap()
                     if pixmap.loadFromData(buf.read()):
-                        try:
-                            self.lbl_chart.setPixmap(pixmap)
-                        except RuntimeError:
-                            pass
+                        self.current_pixmap = pixmap
+                        self.lbl_chart.setText("")
+                        self.update_pixmap_display()
                     else:
-                        try:
-                            self.lbl_chart.setText("图表生成失败：无法加载图片")
-                        except RuntimeError:
-                            pass
+                        self.current_pixmap = None
+                        self.lbl_chart.setPixmap(QPixmap())
+                        self.lbl_chart.setText("图表生成失败：无法加载图片")
                 finally:
                     buf.close()
             finally:
                 if fig:
                     plt.close(fig)
-                plt.close('all')  # 确保关闭所有图表
+                plt.close('all')
             
         except Exception as e:
+            self.current_pixmap = None
             try:
-                error_msg = f"生成图表失败：{str(e)}"
-                self.lbl_chart.setText(error_msg)
+                self.lbl_chart.setText(f"生成图表失败：{str(e)}")
             except RuntimeError:
                 pass
-            except Exception:
-                # 如果连设置文本都失败，就忽略
-                pass
+
+    def _plot_score_trend(self, data):
+        """成绩趋势折线图"""
+        import matplotlib.pyplot as plt
+        if not data:
+            self.lbl_chart.setText("暂无成绩数据")
+            return None
+        # 按考试日期排序
+        sorted_data = sorted(
+            data,
+            key=lambda x: (x.get("exam_date") or "", x.get("course_name"))
+        )
+        scores = [d["score"] for d in sorted_data]
+        labels = [d["course_name"] for d in sorted_data]
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(range(len(scores)), scores, marker='o', linewidth=2, color='#2196F3')
+        ax.fill_between(range(len(scores)), scores, alpha=0.1, color='#64B5F6')
+        ax.set_xticks(range(len(scores)))
+        ax.set_xticklabels([label[:12] + "..." if len(label) > 12 else label for label in labels],
+                           rotation=45, ha='right', fontsize=9)
+        ax.set_ylim(0, 105)
+        ax.set_ylabel('成绩', fontsize=12)
+        ax.set_title('成绩趋势（按考试时间顺序）', fontsize=14, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.3)
+        return fig
+
+    def _plot_distribution_bar(self, data):
+        import matplotlib.pyplot as plt
+        scores = [d["score"] for d in data]
+        grade_ranges = ['<60', '60-69', '70-79', '80-89', '≥90']
+        grade_counts = [
+            sum(1 for s in scores if s < 60),
+            sum(1 for s in scores if 60 <= s < 70),
+            sum(1 for s in scores if 70 <= s < 80),
+            sum(1 for s in scores if 80 <= s < 90),
+            sum(1 for s in scores if s >= 90)
+        ]
+        fig, ax = plt.subplots(figsize=(8, 5))
+        bars = ax.bar(grade_ranges, grade_counts, color=['#f44336', '#ff9800', '#ffeb3b', '#4caf50', '#2196f3'])
+        ax.set_xlabel('成绩区间', fontsize=12)
+        ax.set_ylabel('课程数量', fontsize=12)
+        ax.set_title('成绩分布（柱状图）', fontsize=14, fontweight='bold')
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        for bar, count in zip(bars, grade_counts):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
+                    str(count), ha='center', va='bottom', fontsize=10, fontweight='bold')
+        return fig
+
+    def _plot_distribution_pie(self, data):
+        import matplotlib.pyplot as plt
+        scores = [d["score"] for d in data]
+        sections = [
+            ('优秀 ≥90', sum(1 for s in scores if s >= 90), '#4caf50'),
+            ('良好 80-89', sum(1 for s in scores if 80 <= s < 90), '#8bc34a'),
+            ('中等 70-79', sum(1 for s in scores if 70 <= s < 80), '#ffc107'),
+            ('及格 60-69', sum(1 for s in scores if 60 <= s < 70), '#ff9800'),
+            ('不及格 <60', sum(1 for s in scores if s < 60), '#f44336'),
+        ]
+        filtered = [sec for sec in sections if sec[1] > 0]
+        if not filtered:
+            self.lbl_chart.setText("暂无成绩区间数据")
+            return None
+        labels, counts, colors = zip(*filtered)
+        fig, ax = plt.subplots(figsize=(7, 7))
+        wedges, texts, autotexts = ax.pie(
+            counts,
+            labels=labels,
+            colors=colors,
+            autopct='%1.1f%%',
+            startangle=90,
+            explode=[0.03] * len(counts),
+            textprops={'fontsize': 10}
+        )
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+        ax.set_title('成绩区间占比（饼图）', fontsize=14, fontweight='bold')
+        return fig
+
+    def _plot_semester_trend(self, data):
+        import matplotlib.pyplot as plt
+        from collections import defaultdict
+        semester_scores = defaultdict(list)
+        for d in data:
+            sem = d.get("semester") or self._infer_semester(d.get("exam_date"))
+            if sem:
+                semester_scores[sem].append(d["score"])
+        if not semester_scores:
+            self.lbl_chart.setText("暂无学期数据")
+            return None
+        semesters = sorted(semester_scores.keys())
+        avg_scores = [sum(semester_scores[sem]) / len(semester_scores[sem]) for sem in semesters]
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.plot(semesters, avg_scores, marker='o', linewidth=2.5, color='#673ab7')
+        ax.fill_between(semesters, avg_scores, alpha=0.15, color='#9575cd')
+        ax.set_ylim(0, 105)
+        ax.set_xlabel('学期', fontsize=12)
+        ax.set_ylabel('平均分', fontsize=12)
+        ax.set_title('各学期平均成绩', fontsize=14, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.3)
+        for sem, score in zip(semesters, avg_scores):
+            ax.text(sem, score + 1.5, f"{score:.1f}", ha='center', fontsize=10, fontweight='bold')
+        plt.xticks(rotation=30)
+        return fig
+
+    def _infer_semester(self, exam_date):
+        if not exam_date:
+            return ""
+        try:
+            year = exam_date[:4]
+            month = int(exam_date[5:7]) if len(exam_date) > 5 else 1
+            if 2 <= month <= 7:
+                return f"{year}春"
+            return f"{year}秋"
+        except Exception:
+            return ""
 
 class StudentMyGradesPage(QWidget):
     def __init__(self, api: APIClient, user_id: int):
@@ -183,6 +419,7 @@ class StudentMyGradesPage(QWidget):
         self.api = api
         self.user_id = user_id
         self.all_scores = []  # 保存所有成绩数据
+        self.filtered_scores = []  # 保存当前筛选结果
         self.student_id = None  # 保存 student_id
 
         layout = QVBoxLayout(self)
@@ -400,6 +637,8 @@ class StudentMyGradesPage(QWidget):
         self.display_scores(filtered_scores)
         # 更新统计信息
         self.update_stats(filtered_scores)
+        # 保存当前筛选结果
+        self.filtered_scores = filtered_scores
     
     def display_scores(self, scores):
         """显示成绩列表"""
@@ -641,7 +880,8 @@ class StudentMyGradesPage(QWidget):
     
     def show_chart(self):
         """显示成绩趋势图表"""
-        if not self.all_scores:
+        scores_source = self.filtered_scores if self.filtered_scores else self.all_scores
+        if not scores_source:
             try:
                 # 获取主窗口作为父对象
                 from PyQt6.QtWidgets import QApplication
@@ -665,7 +905,7 @@ class StudentMyGradesPage(QWidget):
             parent_window = app.activeWindow() if app else None
             
             # 如果无法获取主窗口，使用 None（独立窗口）
-            dialog = GradeChartDialog(parent_window, self.all_scores)
+            dialog = GradeChartDialog(parent_window, scores_source)
             # 使用 exec() 显示模态对话框
             dialog.exec()
         except RuntimeError as e:

@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt
 
 from .pages.teacher_info_page import TeacherInfoPage
 from .pages.teacher_my_courses_page import TeacherMyCoursesPage
+from .pages.teacher_schedule_page import TeacherSchedulePage
 from .pages.scores_page import ScoresPage
 from .pages.stats_page import StatsPage
 from .pages.llm_page import LLMPage
@@ -54,6 +55,7 @@ class TeacherMainWindow(QMainWindow):
         menu_items = [
             ("👨‍🏫 我的信息", TeacherInfoPage(self.api, self.user_id)),
             ("📘 我教授的课程", TeacherMyCoursesPage(self.api, self.user_id)),
+            ("📅 我的课程表", TeacherSchedulePage(self.api, self.user_id)),
             ("📝 成绩录入", ScoresPage(self.api, "teacher", self.user_id)),
             ("📊 课程统计", StatsPage(self.api, "teacher", self.user_id)),
             ("🤖 大模型助手", LLMPage(self.api, "teacher")),

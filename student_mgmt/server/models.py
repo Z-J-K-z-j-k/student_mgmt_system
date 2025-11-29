@@ -308,9 +308,9 @@ def create_tables_default():
         cur.execute("""
         CREATE TABLE IF NOT EXISTS students (
             student_id INT PRIMARY KEY AUTO_INCREMENT,
-            user_id INT,
+            user_id INT NOT NULL,
             name VARCHAR(50) NOT NULL,
-            gender ENUM('male', 'female'),
+            gender ENUM('male', 'female') NOT NULL,
             age INT,
             major VARCHAR(100),
             grade INT,
@@ -326,7 +326,7 @@ def create_tables_default():
         cur.execute("""
         CREATE TABLE IF NOT EXISTS teachers (
             teacher_id INT PRIMARY KEY AUTO_INCREMENT,
-            user_id INT,
+            user_id INT NOT NULL,
             name VARCHAR(50) NOT NULL,
             department VARCHAR(100),
             title VARCHAR(100),
@@ -340,7 +340,7 @@ def create_tables_default():
         # 课程表
         cur.execute("""
         CREATE TABLE IF NOT EXISTS courses (
-            course_id INT PRIMARY KEY AUTO_INCREMENT,
+            course_id INT PRIMARY KEY,
             course_name VARCHAR(100) NOT NULL,
             teacher_id INT,
             credit INT DEFAULT 2,
@@ -349,18 +349,28 @@ def create_tables_default():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
         
-        # 成绩表（包含版本字段用于乐观锁）
+        # 学生选课表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS course_selection (
+            selection_id INT PRIMARY KEY AUTO_INCREMENT,
+            student_id INT NOT NULL,
+            course_id INT NOT NULL,
+            semester VARCHAR(20) NOT NULL,
+            selected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+            FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+            UNIQUE KEY uniq_selection (student_id, course_id, semester)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+        
+        # 成绩表（通过 selection_id 关联到 course_selection）
         cur.execute("""
         CREATE TABLE IF NOT EXISTS scores (
             score_id INT PRIMARY KEY AUTO_INCREMENT,
-            student_id INT NOT NULL,
-            course_id INT NOT NULL,
+            selection_id INT NOT NULL,
             score FLOAT,
             exam_date DATE,
-            version INT DEFAULT 1 NOT NULL,
-            UNIQUE KEY uniq_student_course (student_id, course_id),
-            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
-            FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
+            FOREIGN KEY (selection_id) REFERENCES course_selection(selection_id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
         
@@ -401,6 +411,34 @@ def create_tables_default():
             response_summary TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+        
+        # 教室表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS classrooms (
+            classroom_id INT PRIMARY KEY AUTO_INCREMENT,
+            building VARCHAR(50),
+            room VARCHAR(50),
+            capacity INT DEFAULT 60
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+        
+        # 课程排课表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS course_schedule (
+            schedule_id INT PRIMARY KEY AUTO_INCREMENT,
+            course_id INT NOT NULL,
+            teacher_id INT NOT NULL,
+            semester VARCHAR(20) NOT NULL,
+            day_of_week ENUM('Mon','Tue','Wed','Thu','Fri','Sat','Sun') NOT NULL,
+            period_start INT NOT NULL,
+            period_end INT NOT NULL,
+            classroom_id INT,
+            weeks VARCHAR(50) NOT NULL,
+            FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+            FOREIGN KEY (teacher_id) REFERENCES teachers(teacher_id) ON DELETE CASCADE,
+            FOREIGN KEY (classroom_id) REFERENCES classrooms(classroom_id) ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
         

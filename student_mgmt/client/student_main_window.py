@@ -11,6 +11,7 @@ from .pages.student_course_list_page import StudentCourseListPage
 from .pages.student_my_courses_page import StudentMyCoursesPage
 from .pages.student_my_grades_page import StudentMyGradesPage
 from .pages.student_grade_analysis_page import StudentGradeAnalysisPage
+from .pages.student_schedule_page import StudentSchedulePage
 from .pages.llm_page import LLMPage
 from .utils.api_client import APIClient
 from .utils.window_keeper import keep_window
@@ -57,6 +58,7 @@ class StudentMainWindow(QMainWindow):
                 ("🧍 个人信息", lambda: StudentInfoPage(self.api, self.user_id)),
                 ("📖 全部课程", lambda: StudentCourseListPage(self.api, self.user_id)),
                 ("📚 已选课程", lambda: StudentMyCoursesPage(self.api, self.user_id)),
+                ("📅 课程表", lambda: StudentSchedulePage(self.api, self.user_id)),
                 ("📝 我的成绩", lambda: StudentMyGradesPage(self.api, self.user_id)),
                 ("📊 成绩分析", lambda: StudentGradeAnalysisPage(self.api, self.user_id)),
                 ("🤖 大模型助手", lambda: LLMPage(self.api, "student")),

@@ -2,6 +2,8 @@
 CREATE DATABASE IF NOT EXISTS student_mgmt;
 USE student_mgmt;
 
+SET FOREIGN_KEY_CHECKS = 0;
+
 -- ==========================================
 -- 1. 用户表（登录账号 + 权限）
 -- ==========================================
@@ -55,7 +57,7 @@ CREATE TABLE teachers (
 -- ==========================================
 DROP TABLE IF EXISTS courses;
 CREATE TABLE courses (
-    course_id INT PRIMARY KEY AUTO_INCREMENT,
+    course_id INT PRIMARY KEY,
     course_name VARCHAR(100) NOT NULL,
     teacher_id INT,
     credit INT DEFAULT 2,
@@ -64,19 +66,35 @@ CREATE TABLE courses (
 );
 
 -- ==========================================
+-- 9. 学生选课表（核心）
+-- ==========================================
+DROP TABLE IF EXISTS course_selection;
+CREATE TABLE course_selection (
+    selection_id INT PRIMARY KEY AUTO_INCREMENT,
+    student_id INT NOT NULL,
+    course_id INT NOT NULL,
+    semester VARCHAR(20) NOT NULL,
+    selected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+
+    UNIQUE KEY uniq_selection (student_id, course_id, semester)
+);
+
+-- ==========================================
 -- 5. 成绩（选课 + 分数）
 -- ==========================================
 DROP TABLE IF EXISTS scores;
 CREATE TABLE scores (
     score_id INT PRIMARY KEY AUTO_INCREMENT,
-    student_id INT NOT NULL,
-    course_id INT NOT NULL,
-    score FLOAT,
+    selection_id INT NOT NULL,  
+    score FLOAT,                
     exam_date DATE,
-    UNIQUE KEY uniq_student_course (student_id, course_id),
-    FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
-    FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
+    FOREIGN KEY (selection_id) REFERENCES course_selection(selection_id)
+        ON DELETE CASCADE
 );
+
 
 -- ==========================================
 -- 6. 操作日志
@@ -120,3 +138,46 @@ CREATE TABLE llm_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
+
+
+
+-- ==========================================
+-- 11. 教室表（可选但规范）
+-- ==========================================
+DROP TABLE IF EXISTS classrooms;
+CREATE TABLE classrooms (
+    classroom_id INT PRIMARY KEY AUTO_INCREMENT,
+    building VARCHAR(50),
+    room VARCHAR(50),
+    capacity INT DEFAULT 60
+);
+
+
+
+-- ==========================================
+-- 10. 课程排课表（课程时间与地点）
+-- ==========================================
+DROP TABLE IF EXISTS course_schedule;
+CREATE TABLE course_schedule (
+    schedule_id INT PRIMARY KEY AUTO_INCREMENT,
+
+    course_id INT NOT NULL,
+    teacher_id INT NOT NULL,
+    semester VARCHAR(20) NOT NULL,
+
+    day_of_week ENUM('Mon','Tue','Wed','Thu','Fri','Sat','Sun') NOT NULL,
+    period_start INT NOT NULL,
+    period_end INT NOT NULL,
+
+    classroom_id INT,
+    weeks VARCHAR(50) NOT NULL, -- 例如 '1-16'
+
+    FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+    FOREIGN KEY (teacher_id) REFERENCES teachers(teacher_id) ON DELETE CASCADE,
+    FOREIGN KEY (classroom_id) REFERENCES classrooms(classroom_id) ON DELETE SET NULL
+);
+
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+

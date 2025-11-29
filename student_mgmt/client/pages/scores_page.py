@@ -133,7 +133,12 @@ class ScoresPage(QWidget):
                 resp = self.api.get("/api/scores", params=params)
             
             if resp.status_code != 200:
-                QMessageBox.critical(self, "错误", f"服务器返回错误：{resp.status_code}")
+                try:
+                    error_data = resp.json()
+                    error_msg = error_data.get("msg", f"服务器返回错误：{resp.status_code}")
+                except:
+                    error_msg = f"服务器返回错误：{resp.status_code}"
+                QMessageBox.critical(self, "错误", error_msg)
                 return
                 
             data = resp.json()
